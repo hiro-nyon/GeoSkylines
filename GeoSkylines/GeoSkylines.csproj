@@ -15,6 +15,13 @@
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
   </PropertyGroup>
+  <PropertyGroup>
+    <CitiesSkylinesManagedDir Condition="'$(CitiesSkylinesManagedDir)' == '' and Exists('/Users/$(USER)/Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Data/Managed/Assembly-CSharp.dll')">/Users/$(USER)/Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Data/Managed</CitiesSkylinesManagedDir>
+    <CitiesSkylinesManagedDir Condition="'$(CitiesSkylinesManagedDir)' == '' and Exists('$(HOME)/Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Data/Managed/Assembly-CSharp.dll')">$(HOME)/Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Data/Managed</CitiesSkylinesManagedDir>
+    <CitiesSkylinesManagedDir Condition="'$(CitiesSkylinesManagedDir)' == '' and Exists('C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\Assembly-CSharp.dll')">C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed</CitiesSkylinesManagedDir>
+    <CitiesSkylinesModsDir Condition="'$(CitiesSkylinesModsDir)' == '' and Exists('$(HOME)/Library/Application Support/Colossal Order/Cities_Skylines/Addons/Mods')">$(HOME)/Library/Application Support/Colossal Order/Cities_Skylines/Addons/Mods</CitiesSkylinesModsDir>
+    <CitiesSkylinesModsDir Condition="'$(CitiesSkylinesModsDir)' == '' and '$(LOCALAPPDATA)' != ''">$(LOCALAPPDATA)\Colossal Order\Cities_Skylines\Addons\Mods</CitiesSkylinesModsDir>
+  </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
@@ -34,16 +41,16 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <HintPath>$(CitiesSkylinesManagedDir)/Assembly-CSharp.dll</HintPath>
     </Reference>
     <Reference Include="Assembly-CSharp-firstpass">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
+      <HintPath>$(CitiesSkylinesManagedDir)/Assembly-CSharp-firstpass.dll</HintPath>
     </Reference>
     <Reference Include="ColossalManaged">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\ColossalManaged.dll</HintPath>
+      <HintPath>$(CitiesSkylinesManagedDir)/ColossalManaged.dll</HintPath>
     </Reference>
     <Reference Include="ICities">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\ICities.dll</HintPath>
+      <HintPath>$(CitiesSkylinesManagedDir)/ICities.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -53,7 +60,7 @@
     <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
     <Reference Include="UnityEngine">
-      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>$(CitiesSkylinesManagedDir)/UnityEngine.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>
@@ -73,9 +80,12 @@
     <Compile Include="WGS84_UTM.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <PropertyGroup>
-    <PostBuildEvent>mkdir "%25LOCALAPPDATA%25\Colossal Order\Cities_Skylines\Addons\Mods\$(SolutionName)"
-del "%25LOCALAPPDATA%25\Colossal Order\Cities_Skylines\Addons\Mods\$(SolutionName)\$(TargetFileName)"
-xcopy /y "$(TargetPath)" "%25LOCALAPPDATA%25\Colossal Order\Cities_Skylines\Addons\Mods\$(SolutionName)"</PostBuildEvent>
-  </PropertyGroup>
+  <Target Name="ValidateCitiesSkylinesPaths" BeforeTargets="Build">
+    <Error Condition="'$(CitiesSkylinesManagedDir)' == ''" Text="CitiesSkylinesManagedDir is not set. Pass /p:CitiesSkylinesManagedDir=&lt;ManagedDir&gt; or install Cities: Skylines in a supported default location." />
+    <Error Condition="!Exists('$(CitiesSkylinesManagedDir)/Assembly-CSharp.dll')" Text="Assembly-CSharp.dll was not found in $(CitiesSkylinesManagedDir)." />
+  </Target>
+  <Target Name="DeployMod" AfterTargets="Build" Condition="'$(CitiesSkylinesModsDir)' != '' and Exists('$(TargetPath)')">
+    <MakeDir Directories="$(CitiesSkylinesModsDir)/$(SolutionName)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(CitiesSkylinesModsDir)/$(SolutionName)/$(TargetFileName)" SkipUnchangedFiles="false" />
+  </Target>
 </Project>
