@@ -1,272 +1,152 @@
-# GeoSkylines general info
-Cities: Skylines game mod for import/export of geodata. 
+# GeoSkylines
 
-The export pipeline now supports:
-- direct `CSV` and `GeoJSON` output from the mod
-- optional `SHP` and `GeoParquet` conversion through the bundled `GeoSkylines.ExportCli`
-- batch export via `Right Ctrl + E`
+GIS import/export tooling for `Cities: Skylines 1`.
 
-Install game mod (if not on Steam workshop):
-- use the provided GeoSkylines.dll
-- if you want to compile the code you need also additional code from burningmime: https://github.com/burningmime/curves/tree/master/burningmime.curves
-- go to c:\Users\<username>\AppData\Local\Colossal Order\Cities_Skylines\Addons\Mods\
-- create a folder GeoSkylines
-- copy the GeoSkylines.dll file to newly created folder GeoSkylines
-- in game, go to Content Manager > Mods > turn on GeoSkylines
+Current release target: `1.0.0-beta.1`
 
-## Development on macOS
-- Required tools:
-  - `mono` for building the legacy CS1 mod project
-  - `dotnet` SDK for building `GeoSkylines.ExportCli`
-- Default CS1 managed assemblies on macOS:
-  - `~/Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Data/Managed`
-- Default Mods directory on macOS:
-  - `~/Library/Application Support/Colossal Order/Cities_Skylines/Addons/Mods`
-- Build both projects:
-  - `./scripts/build-mac.sh Debug`
-- Override paths when needed:
-  - `CITIES_SKYLINES_MANAGED_DIR=/path/to/Managed CITIES_SKYLINES_MODS_DIR=/path/to/Mods ./scripts/build-mac.sh Release`
-- Build only the mod:
-  - `SKIP_CLI=1 ./scripts/build-mac.sh Debug`
+## What It Does
+- Direct export from the mod to `CSV` and `GeoJSON`
+- Optional conversion to `SHP` and `GeoParquet` through `GeoSkylines.ExportCli`
+- Batch export with `Right Ctrl + E`
+- Legacy import workflows remain available for roads, rails, trees, zones, water, and services
 
-The macOS build script copies `GeoSkylines.dll` into the game Mods directory after a successful build.
+## Export Layers
+- `roads`
+- `rails`
+- `buildings`
+- `zones`
+- `trees`
+- `transit_lines`
+- `transit_stops`
+- `transit_facilities`
+- `pedestrian_areas`
+- `pedestrian_streets`
+- `pedestrian_service_points`
+- `transit_hubs`
+- `outside_connections`
 
-See the Word document for full details on data-related preparations etc. !
+## Output Formats
+- `csv`
+- `geojson`
+- `shp` via CLI
+- `parquet` via CLI
 
-GeoSkylines methods are called using the threading hooks via hotkeys, combination of ONLY RIGHT Ctrl + R, L, W, Q, T, V, S, Z, P, G, H, J, K. To avoid conflicts with hotkeys of other mods, it is recommended to turn off other mods before using GeoSkylines. After using import or export methods of GeoSkylines then you can turn the mod off. (Though this has been limited now to right Ctrl)
+Every batch export writes:
+- `<MapName>_<layer>.<ext>`
+- `export_manifest.json`
 
-Three stages of creating playable model in Cities: Skylines based on geodata:
-1. Prepare geodata for import
-2. Create base model using GeoSkylines methods
-3. Create playable model (manual post-processing)
+## Quick Start
+1. Copy `GeoSkylines.dll` into your `Cities_Skylines/Addons/Mods/GeoSkylines` folder.
+2. Create `Files/import_export.conf` in the game working directory.
+3. Set `ExportFormats`, `ExportLayers`, and optionally `ExportCliPath`.
+4. In game, enable the mod and run `Right Ctrl + E`.
 
-# Prepare vector geodata for import
-I chose to use a simple CSV format with geometry data recorded as WKT. Thus, any geo-dataset can be used. For testing I used OSM predominantly. For the CSV file preparation I used OSMSharp library (other programs such as QGIS or FME would suffice). See the code examples of the data preparation using OSMSharp. 
-For preparing the data in QGIS see the Word document!
-During the data preparation phase I followed these initial steps:
-- Deciding on an area to model. The game area is 17.28 x 17.28 km. This fits cities up to 400,000. Above that you will have to model just parts of the city. 
-- Choose a mid-point of the modeled area - this will also be the mid-point of your model. See the Word document for more details.
-- In import_export.txt file set the CenterLatitude and CenterLongitude. Make sure not to swap latitude and longitude! 
-- Though it's not necessary, I'd recommend also creating a bounding box of your area. This can be done in QGIS (see Word document) or use one of my helper method WgsBbox() in https://github.com/gonzikcz/GeoSkylines/tree/master/OSMSharp_codes
-- download geodata using the defined bouding box. In my case I got the OSM data from OverPass API. But actually now I'd recommend QGIS, it's more user friendly. See Word document for more details!
-- Filtering out most of the attributes. In most cases I just need the geometry, type of object (e.g. road type). See examples. 
-- Resulting CSV files should be named: roads_rwo.csv, waterway_rwo.csv, water_rwo.csv, buildings_rwo.csv, amenity_rwo.csv, trees_rwo.csv, zones_rwo.csv.
+An example config is available at [examples/import_export.conf.example](examples/import_export.conf.example).
 
-# Prepare raster image for tree coverage 
-There is a GeoSkylines method for creating tree coverage from raster image (trees.png saved in c:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Files\). See the Word document to prepare the raster image in QGIS. 
+## Hotkeys
+- `Right Ctrl + E`: batch export using configured layers and formats
+- `Right Ctrl + G`: export road and rail network layers
+- `Right Ctrl + H`: export buildings
+- `Right Ctrl + J`: export zones
+- `Right Ctrl + K`: export trees
+- `Right Ctrl + P`: dump prefab metadata to the game log
+- `Right Ctrl + Left Click`: inspect lat/lon under the cursor
 
-# Prepare tree vector layer
-Alternatively, tree coverage can be created from vector data as well. To prepare the file trees_rwo.csv, follow the steps described in the Word document.  
+Legacy import hotkeys remain in place for roads, rails, water, trees, zones, and services.
 
-# TreesXML
-Another way the coverage can be created is using the TreesXML file (trees.xml). The file can be generated from a raster of a much higher resolution then 1081x1081 with a simple console app - ImageToTreesXML. It can also be generated from vector data which specifies the composition of the forest in percentages, using the Python script VectorToTreesXML.py for QGIS. Both procedures are described in the Word document. 
+## Config Keys
+Canonical config file: `import_export.conf`
 
-# Import methods of GeoSkylines mod
-GeoSkylinesImport.ImportRoads():
-- Run by hotkey combo: right Ctrl + R
-- Requires: roads_rwo.csv, rwo_cs_road_match.csv, import_export.txt
-- Description: loops over all road segments in roads_rwo.csv, matches road types according to rwo_cs_road_match.csv, creates game nodes and then game roads, names the roads according to geodata orginals, creates a bridge if original data says bridge = yes, creates one way roads. 
-- Note: it’s better to call this method in actual game not the map editor. That way you can see the progress on the screen (segments appearing) and also the roads stick better to the surface. In map editor the roads are bit elevated. 
+Legacy support:
+- `import_export.txt` is still read if `import_export.conf` is absent.
+- Saving settings from the in-game UI migrates to `import_export.conf`.
 
-GeoSkylinesImport.ImportRails():
-- Run by hotkey combo: right Ctrl + L
-- Requires: rails_rwo.csv, rwo_cs_rail_match.csv, import_export.txt
-- Description: loops over all rail segments in rails_rwo.csv, matches rail types according to rwo_cs_rail_match.csv, creates game nodes and then game rails. 
-- Note: C:S doesn’t use that many railways as in the real world. The amount of railways created by this method is therefore too much for C:S. Either filter out the geodata first or buldoze it after creation. 
+Export-specific keys:
+- `ExportOutputDirectory`
+- `ExportFormats`
+- `ExportLayers`
+- `ExportCliPath`
+- `ExportRunCli`
+- `ExportIncludeExtendedAttributes`
 
-GeoSkylinesImport.ImportWaterBody():
-- Run by hotkey combo: right Ctrl + W
-- Requires: water_rwo.csv, import_export.txt
-- Description: loops over all records of standing water defined by a polygon in water_rwo.csv, creates a bounding box around polygon, then every 5 metres withing the bounding box calls Ray casting algorithm to find out whether point is within polygon or not. If yes, then lower terrain by defined value (variable ImportWaterDepth, see more details below). 
+Core geographic keys still required for coordinate conversion:
+- `MapName`
+- `CenterLatitude`
+- `CenterLongitude`
 
-GeoSkylinesImport.ImportWaterWay():
-- Run by hotkey combo: right Ctrl + Q
-- Requires: waterway_rwo.csv, import_export.txt
-- Description: loops over all segments of water way in waterway_rwo.csv, lowers terrain by defined value (variable ImportWaterWayDepths, see more details below) every 5 metres between the vertices of each segments. 
+## macOS Development
+Requirements:
+- `mono` for the legacy CS1 mod project
+- `dotnet` SDK for the CLI
+- a local Cities: Skylines 1 install
 
-GeoSkylinesImport.ImportTreesRaster():
-- Run by hotkey combo: right Ctrl + T
-- Requires: trees.png (max 16384x16384 resolution, but preferably much much lower), import_export.txt
-- Description: loops over every pixel and for every non-white pixel it creates a tree. If variable ImportTreesRasterMultiply is defined, method adjust the number of trees created (see more details below). Method adds randomness into the position of the created trees. 
+Default macOS paths:
+- Managed DLLs: `~/Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Data/Managed`
+- Mods folder: `~/Library/Application Support/Colossal Order/Cities_Skylines/Addons/Mods`
 
-GeoSkylinesImport.ImportTreesVector():
-- Run by hotkey combo: right Ctrl + V
-- Requires: trees_rwo.csv, import_export.txt
-- Description: loops over all trees in trees_rwo.csv and creates a tree.
+Build:
 
-GeoSkylinesImport.ImportTreesXML():
-- Run by hotkey combo: right Ctrl + X
-- Requires: trees.xml, import_export.txt
-- Description: Loop over the tree positions in trees.xml, and depending on the mode (vector|raster) places the tree directly, or places a single (can be increased using ImportTreesXmlMultiply) tree randomly within the "pixel" position. The benefit of this method, above the higher resolution tree coverage, is that the tree positions can be categorized into compositions (type of trees, ex. oak), with each composition having one or more tree (TreeInfo) prefabs (ImportTreesXmlTreeTypes)
+```bash
+./scripts/build-mac.sh Debug
+```
 
-GeoSkylinesImport.ImportZonesArea():
-- Run by hotkey combo: right Ctrl + Z
-- Requires: buildings_rwo.csv, rwo_cs_zone_match.csv, import_export.txt
-- Description: sets zones to existing zone blocks (must be called after creating roads, this will create zone blocks as well). First it loops over every building in buildings_rwo.csv, finds zone blocks near the position of the building, matches the building type to a game zone (e.g. building type = house to zone = ResidentialLow) according to rwo_cs_zone_match.csv and then assigns selected zone to the zone blocks. 
+Override locations:
 
-GeoSkylinesImport.ImportServices():
-- Run by hotkey combo: right Ctrl + S
-- Requires: amenity_rwo.csv, rwo_cs_service_match.csv, import_export.txt
-- Description: loops over every amenity (service) in amenity_rwo.csv, matches amenity type to a game service building according to rwo_cs_service_match.csv and creates a service building. 
-- Note: the service buildings created by this method doesn't seem to work properly but still it might be handy to know where the services are. It can be buldozed and then re-created manually. 
+```bash
+CITIES_SKYLINES_MANAGED_DIR=/path/to/Managed \
+CITIES_SKYLINES_MODS_DIR=/path/to/Mods \
+./scripts/build-mac.sh Release
+```
 
-GeoSkylinesImport.ImportBuildings():
-- Requires: buildings_rwo.csv, import_export.txt
-- Description: loops over every building in buildings_rwo.csv, tries to calculate the right building rotation angle and creates the building. 
-- Note: this method is not used due to many complications. Difficult to calculate the right rotation angle, buildings are offten to close to the roads, and mainly: creating buildings directly goes against the game logic where only zones are set. Although this can be overcome by mods, it was still quite unusable. 
+Build only the mod:
 
-# Export methods of GeoSkylines mod
-GeoSkylinesExport.BatchExportConfiguredLayers():
-- Run by hotkey combo: right Ctrl + E
-- Requires: import_export.conf (or legacy import_export.txt)
-- Description: exports all layers listed in `ExportLayers` into all formats listed in `ExportFormats`, writes an `export_manifest.json`, and optionally invokes the CLI for `shp` / `parquet`.
+```bash
+SKIP_CLI=1 ./scripts/build-mac.sh Debug
+```
 
-GeoSkylinesExport.ExportSegments(): 
-- Run by hotkey combo: right Ctrl + G
-- Requires: import_export.conf (or legacy import_export.txt)
-- Description: exports roads and rails using the new feature pipeline. CSV is still written for backward compatibility and GeoJSON is available when enabled in `ExportFormats`. 
+## Windows Development
+Build both projects:
 
-GeoSkylinesExport.ExportBuildings():
-- Run by hotkey combo: right Ctrl + H
-- Requires: import_export.conf (or legacy import_export.txt)
-- Description: exports building footprints as GIS features with core attributes and optional extended attributes.
+```powershell
+.\scripts\build-windows.ps1 -Configuration Release
+```
 
-GeoSkylinesExport.ExportZones():
-- Run by hotkey combo: right Ctrl + J
-- Requires: import_export.conf (or legacy import_export.txt)
-- Description: exports zone blocks as GIS polygon features.
+## Release Packaging
+Create a release zip on macOS:
 
-GeoSkylinesExport.ExportTrees():
-- Run by hotkey combo: right Ctrl + K
-- Requires: import_export.conf (or legacy import_export.txt)
-- Description: exports tree instances as GIS point features.
+```bash
+./scripts/package-release.sh Release
+```
 
-Additional batch-export layers available through `ExportLayers`:
-- roads
-- rails
-- buildings
-- zones
-- trees
-- transit_lines
-- transit_stops
-- transit_facilities
-- pedestrian_areas
-- pedestrian_streets
-- pedestrian_service_points
-- transit_hubs
-- outside_connections
+This writes `release/GeoSkylines-<version>.zip` with:
+- mod DLLs
+- CLI binaries
+- `README.md`
+- `LICENSE`
+- `NOTICE`
+- `CHANGELOG.md`
+- example config and sample exports
 
-# Helper methods of GeoSkylines mod
-GeoSkylinesExport.DisplayLLOnMouseClick():
-- Runb by hotkey combo: right Ctrl + left mouse click
-- Requires: import_export.txt
-- Description: Displays in a message box screen, game and Lat Lon coordinates of the place of the click. 
+## Samples
+- [examples/sample_roads.geojson](examples/sample_roads.geojson)
+- [examples/sample_roads.fieldmap.json](examples/sample_roads.fieldmap.json)
+- [examples/sample_export_manifest.json](examples/sample_export_manifest.json)
 
-GeoSkylinesExport.OutputPrefabInfo():
-- Run by hotkey combo: right Ctrl + P
-- Requires: nothing
-- Description: outputs all road types (NetInfo), building types (BuidlingInfo) and tree types (TreeInfo) loaded currently in the game into "c:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\output_log.txt". 
-- Note: this is valuable for creating the match CSV files and setting some variables in import_export.txt
+## Known Limitations
+- `pedestrian_areas` is currently a placeholder layer and may export zero features with a warning.
+- `transit_lines` and `transit_stops` use reflection to tolerate CS1 API differences, so edge cases should be tested against real saves.
+- `SHP` and `GeoParquet` require `GeoSkylines.ExportCli`; the mod only writes `CSV` and `GeoJSON` directly.
+- Phase 2 layers such as airport areas, utility networks, park areas, campus areas, and industry areas are not implemented yet.
 
-# Configuration of import and export methods
-CSV files for import, CSV files for matching types of objects, trees.png file, trees.xml and import/export config have to be stored in folder: c:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Files\. Use `import_export.conf` as the canonical file name; `import_export.txt` is still accepted for backward compatibility. This folder is also used to store legacy CSV aliases such as `roads_cs.csv`. 
+## Attribution
+This repository modernizes the original GeoSkylines idea and codebase. See [NOTICE](NOTICE) for release-time attribution notes.
 
-File `import_export.conf` lists parameters for configuring the import and export methods. Legacy `import_export.txt` is still read. In addition to the original parameters, the export pipeline recognizes:
-- ExportOutputDirectory
-- ExportFormats
-- ExportLayers
-- ExportCliPath
-- ExportRunCli
-- ExportIncludeExtendedAttributes
+Useful upstream references:
+- Original GeoSkylines: [gonzikcz/GeoSkylines](https://github.com/gonzikcz/GeoSkylines)
+- burningmime curves: [burningmime/curves](https://github.com/burningmime/curves)
 
-MapName: 
-- Description: not used in the code, just a label for distinguishing the file from others
-- Example: Svit
-
-CenterLatitude:
-- Description: Latitude of the defined mid-point. Coordinates of the mid-point are used for conversion between real-world WGS coordinates and the game coordinates. It should be pretty accurate in order to get accurate conversion of coordinates. 
-- Example: 49.063148018262
-
-CenterLongitude:
-- Description: Longitude of the defined mid-point. Coordinates of the mid-point are used for conversion between real-world WGS coordinates and the game coordinates. It should be pretty accurate in order to get accurate conversion of coordinates.
-- Example: 20.1857094521613
-
-ImportRoadsCoordMax:
-- Description: Specifies the max coord (in both directions - positive and negative) for creating game objects. Game area is 17280 x 17280, thus axes x a z range from -8640 to 8640. This represents 9x9 tile. If no value is defined, then the absolute 8640 will be used. 
-- Example: 4800 (this represents the area of 5x5 tiles, game objects won't be created past this)
-
-ImportRailsCoordMax:
-- Description: Specifies the max coord (in both directions - positive and negative) for creating game objects. Game area is 17280 x 17280, thus axes x a z range from -8640 to 8640. This represents 9x9 tiles. If no value is defined, then the absolute 8640 will be used. 
-- Example: 4800 (this represents the area of 5x5 tiles, game objects won't be created past this)
-
-ImportBuildingsCoordMax: 
-- Description: Specifies the max coord (in both directions - positive and negative) for creating game objects. Game area is 17280 x 17280, thus axes x a z range from -8640 to 8640. This represents 9x9 tiles. If no value is defined, then the absolute 8640 will be used. 
-- Example: 4800 (this represents the area of 5x5 tiles, game objects won't be created past this)
-
-ImportTreesRasterOffsetX & ImportTreesRasterOffsetY: 
-- Description: If the tree map image (and the game trees generated based on the map image) doesn't align with other layers (roads, water basins) then it's possible to use ImportTreesRasterOffsetX & ImportTreesRasterOffsetY to move it around and align it with other layers. 
-- Example: 100 (metres)
-
-ImportTreesRasterMultiply: 
-- Description: To make tree coverage denser or less dense (e.g. to avoid reaching the game limit 250 000 of trees created), you can use parameter ImportTreesRasterMultiply. The number specifies a step at which tree creation will be skipped (if number is negative) or an additional tree will be created (if number is positive). 
-- Example A: -2 (every second tree creation will be skipped, i.e. the total number of trees will be divided by 2)
-- Example B: 1 (at every tree creation, new additional tree will be created, i.e. multiplying the number of tree by 2). 
-
-ImportTreesTreeTypes: 
-- Description: For adding diversity in the tree creation process. List of ID of a TreeInfo (prefab) instances. It has to be IDs as names getting the TreeInfo from name didn't work in the code. For each tree creation, one TreeInfo is randomly selected from the provided list. 
-- Example: 0,1,2,6,14,13 (you can use the helper method GeoSkylinesExport.OutputPrefabInfo() to list IDs of all TreeInfo instances) 
-
-ImportTreesCoordMax: 
-- Description: Specifies the max coord (in both directions - positive and negative) for creating game objects. Game area is 17280 x 17280, thus axes x a z range from -8640 to 8640. This represents 9x9 tiles. If no value is defined, then the absolute 8640 will be used. 
-- Example: 8640 (this represents the area of 9x9 tiles, game objects won't be created past this)
-- Note: lower the max coord if you need to lower the total number of trees if reaching the tree limit is a problem. 
-
-ImportTreesRasterTreesLimit:
-- Description: If you use a mod that increases the tree limit, ex: Tree Control 1.0, specify the limit here
-- Example: 2000000
-
-ImportTreesXmlOffsetX & ImportTreesXmlOffsetY: 
-- Description: If the treesXML file (and the game trees generated based on the treesXML file) doesn't align with other layers (roads, water basins) then it's possible to use ImportTreesXmlOffsetX & ImportTreesXmlOffsetY to move it around and align it with other layers. 
-- Example: 100 (metres)
-
-ImportTreesXmlMultiply: 
-- Description: To make tree coverage denser or less dense, when the provided trees.xml was generated using raster data (e.g. to avoid reaching the game limit 250 000 or the limit specified in ImportTreesXmlTreesLimit, of trees created), you can use parameter ImportTreesXmlMultiply. The number specifies a step at which tree creation will be skipped (if number is negative) or an additional tree will be created (if number is positive). 
-- Example A: -2 (every second tree creation will be skipped, i.e. the total number of trees will be divided by 2)
-- Example B: 1 (at every tree creation, new additional tree will be created, i.e. multiplying the number of tree by 2). 
-
-ImportTreesXmlTreeTypes: 
-- Description: For adding diversity in the tree creation process. List of composition ID and their TreeInfo IDs (you can use the helper method GeoSkylinesExport.OutputPrefabInfo() to list IDs of all TreeInfo (prefab) instances). For each tree creation, depending on the composition ID from the provided list, one TreeInfo is randomly selected from the composition sub-list.
-- Example: [1{0}],[2{1|6}] (Each composition is defined with []. Let's take [1{0}] for example. The first number indicates the ID of the composition (or attribute if trees.xml was generated from vector data). IDs of TreeInfo instances are defined withing {}, in this case 0, so if a tree position is of composition ID 1, the TreeInfo of an ID 0 will always be selected, but if the composition ID is 2, then either a TreeInfo of ID 1 or 6 will be selected)
-
-ImportTreesXmlTreesLimit:
-- Description: If you use a mod that increases the tree limit, ex: Tree Control 1.0, specify the limit here
-- Example: 2000000
-
-ImportWaterWayTypes: 
-- Description: List of waterway types that the code will work with. Any other water way type will be ignored. 
-- Example A: river
-- Example B: river, stream, canal
-
-ImportWaterWayDepths: 
-- Description: List of depths for water way types defined by ImportWaterWayTypes. 
-- Example: 15, 10, 10 (assuming "ImportWaterWayTypes=river, stream, canal" then river basins will be 15 metres deep, stream and canal basins will be 10 metres deep). 
-- Note: the depths must be exgaragated for the game water dynamics to work properly
-
-ImportWaterWayWidths: 
-- Description: List of additional widths for water way types defined by ImportWaterWayTypes. One "width" represents 16x16 metres on 1081 x 1081 grid. 
-- Example: 1, 0 (assuming "ImportWaterWayTypes=river, stream" then river basins will width=2, stream basins will have width=1)
-
-ImportWaterDepth: 
-- Description: Defines the depth of standing water basins. 
-- Example: 15
-
-ExportCoordsBox: 
-- Description: Xmin, Zmin, Xmax, Zmax game coordinates - only game objects within this bounding box will be exported. If not defined then bounding box is set to max (i.e. all game objects are exported). 
-- Example: -250, -250, 1000, 1000
-- Note: avoid using 0 as 0 will be considered as failed attempt to set the coordinate (and thus set to max coord). Instead of 0 use -1 or 1. 
-
-# Create a playable model in Cities: Skylines (post-processing)
-Calling the GeoSkylines' import methods creates just a geographically accurate base model. However, it has to be manually processed to create a playable model. Sources of water have to be added to the water basins. Connection to a highway has to be created in order for new citizens to move in. The created game objects must be fixed in some cases (e.g. due to bad input GIS data). It is recommended that the post-processing is done by an experienced C: S player. 
-
-# Acknowledgements
-This mod was inspired by another C: S mods, mainly Cimptographer (Mapper). The curved segments in this mod are created with library burningmime.curves. Data from OSM were mainly prepared with library OSMSharp. Big thanks to all these creations and their authors! 
+## Release Checklist
+- Build the mod and CLI in `Release`
+- Run a real in-game batch export
+- Validate `GeoJSON`, `SHP`, and `GeoParquet` in QGIS
+- Confirm the packaged zip contains the expected binaries and docs
