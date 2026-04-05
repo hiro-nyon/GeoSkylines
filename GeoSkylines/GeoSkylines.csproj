@@ -45,10 +45,6 @@
     <Reference Include="ICities">
       <HintPath>..\..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Cities_Data\Managed\ICities.dll</HintPath>
     </Reference>
-    <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
-      <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\..\Json130r3\Bin\net35\Newtonsoft.Json.dll</HintPath>
-    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
@@ -62,15 +58,12 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="burningmime.curves\CubicBezier.cs" />
-    <Compile Include="burningmime.curves\CurveBuilder.cs" />
     <Compile Include="burningmime.curves\CurveFit.cs" />
-    <Compile Include="burningmime.curves\CurveFitBase.cs" />
-    <Compile Include="burningmime.curves\CurvePreprocess.cs" />
-    <Compile Include="burningmime.curves\Spline.cs" />
-    <Compile Include="burningmime.curves\SplineBuilder.cs" />
-    <Compile Include="burningmime.curves\VectorHelper.cs" />
     <Compile Include="GeoSkylines.cs" />
+    <Compile Include="GeoSkylinesConfig.cs" />
     <Compile Include="GeoSkylinesExport.cs" />
+    <Compile Include="GeoSkylinesExportModels.cs" />
+    <Compile Include="GeoSkylinesExportWriters.cs" />
     <Compile Include="GeoSkylinesImport.cs" />
     <Compile Include="GeoSkylinesLoading.cs" />
     <Compile Include="GeoSkylinesThreading.cs" />
