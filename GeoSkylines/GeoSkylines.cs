@@ -28,8 +28,6 @@ namespace GeoSkylines
             string centerLongitude = config.GetValue("CenterLongitude", "0");
             string outputDirectory = config.GetValue(GeoSkylinesConfig.ExportOutputDirectoryKey, config.GetOutputDirectory());
             string[] selectedFormats = config.GetExportFormats();
-            int selectedFormatIndex = GetSelectedFormatIndex(selectedFormats);
-            string selectedFormat = GeoSkylinesLayerCatalog.AvailableFormats[selectedFormatIndex];
             string[] selectedLayers = config.GetExportLayers();
             string cliPath = config.GetValue(GeoSkylinesConfig.ExportCliPathKey, string.Empty);
             bool runCli = config.GetBool(GeoSkylinesConfig.ExportRunCliKey, false);
@@ -39,11 +37,18 @@ namespace GeoSkylines
             geoGroup.AddTextfield("Center latitude", centerLatitude, delegate(string value) { centerLatitude = value; }, delegate(string value) { centerLatitude = value; });
             geoGroup.AddTextfield("Center longitude", centerLongitude, delegate(string value) { centerLongitude = value; }, delegate(string value) { centerLongitude = value; });
             exportGroup.AddTextfield("Output directory", outputDirectory, delegate(string value) { outputDirectory = value; }, delegate(string value) { outputDirectory = value; });
-            exportGroup.AddDropdown("Format", GeoSkylinesLayerCatalog.AvailableFormats, selectedFormatIndex, delegate(int value)
+            UIHelperBase formatsGroup = exportGroup.AddGroup("Formats");
+            bool[] formatSelections = GeoSkylinesLayerCatalog.AvailableFormats
+                .Select(delegate(string format) { return selectedFormats.Contains(format, System.StringComparer.OrdinalIgnoreCase); })
+                .ToArray();
+            for (int i = 0; i < GeoSkylinesLayerCatalog.AvailableFormats.Length; i++)
             {
-                selectedFormatIndex = value;
-                selectedFormat = GeoSkylinesLayerCatalog.AvailableFormats[value];
-            });
+                int formatIndex = i;
+                formatsGroup.AddCheckbox(
+                    GeoSkylinesLayerCatalog.AvailableFormats[formatIndex],
+                    formatSelections[formatIndex],
+                    delegate(bool value) { formatSelections[formatIndex] = value; });
+            }
             bool[] layerSelections = GeoSkylinesLayerCatalog.AllLayers
                 .Select(delegate(string layer) { return selectedLayers.Contains(layer, System.StringComparer.OrdinalIgnoreCase); })
                 .ToArray();
@@ -67,9 +72,17 @@ namespace GeoSkylines
             exportGroup.AddCheckbox("Include extended attributes", extendedAttributes, delegate(bool value) { extendedAttributes = value; });
             exportGroup.AddButton("Save export settings", delegate()
             {
+                string[] formats = GeoSkylinesLayerCatalog.AvailableFormats
+                    .Where(delegate(string format, int index) { return formatSelections[index]; })
+                    .ToArray();
+                if (formats.Length == 0)
+                {
+                    formats = GeoSkylinesConfig.DefaultFormats;
+                }
+
                 string layers = string.Join(",", GeoSkylinesLayerCatalog.AllLayers.Where(delegate(string layer, int index) { return layerSelections[index]; }).ToArray());
                 config.SetValue(GeoSkylinesConfig.ExportOutputDirectoryKey, outputDirectory);
-                config.SetValue(GeoSkylinesConfig.ExportFormatsKey, selectedFormat);
+                config.SetValue(GeoSkylinesConfig.ExportFormatsKey, string.Join(",", formats));
                 config.SetValue(GeoSkylinesConfig.ExportLayersKey, layers);
                 config.SetValue(GeoSkylinesConfig.ExportCliPathKey, cliPath);
                 config.SetValue(GeoSkylinesConfig.ExportRunCliKey, runCli.ToString().ToLowerInvariant());
@@ -95,25 +108,6 @@ namespace GeoSkylines
                 GeoSkylinesExport export = new GeoSkylinesExport();
                 export.BatchExportConfiguredLayers();
             });
-        }
-
-        private static int GetSelectedFormatIndex(string[] configuredFormats)
-        {
-            if (configuredFormats == null || configuredFormats.Length == 0)
-            {
-                return 0;
-            }
-
-            string selectedFormat = configuredFormats[0];
-            for (int i = 0; i < GeoSkylinesLayerCatalog.AvailableFormats.Length; i++)
-            {
-                if (string.Equals(GeoSkylinesLayerCatalog.AvailableFormats[i], selectedFormat, System.StringComparison.OrdinalIgnoreCase))
-                {
-                    return i;
-                }
-            }
-
-            return 0;
         }
     }
 }
