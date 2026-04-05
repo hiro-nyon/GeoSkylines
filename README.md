@@ -14,6 +14,23 @@ Install game mod (if not on Steam workshop):
 - copy the GeoSkylines.dll file to newly created folder GeoSkylines
 - in game, go to Content Manager > Mods > turn on GeoSkylines
 
+## Development on macOS
+- Required tools:
+  - `mono` for building the legacy CS1 mod project
+  - `dotnet` SDK for building `GeoSkylines.ExportCli`
+- Default CS1 managed assemblies on macOS:
+  - `~/Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Data/Managed`
+- Default Mods directory on macOS:
+  - `~/Library/Application Support/Colossal Order/Cities_Skylines/Addons/Mods`
+- Build both projects:
+  - `./scripts/build-mac.sh Debug`
+- Override paths when needed:
+  - `CITIES_SKYLINES_MANAGED_DIR=/path/to/Managed CITIES_SKYLINES_MODS_DIR=/path/to/Mods ./scripts/build-mac.sh Release`
+- Build only the mod:
+  - `SKIP_CLI=1 ./scripts/build-mac.sh Debug`
+
+The macOS build script copies `GeoSkylines.dll` into the game Mods directory after a successful build.
+
 See the Word document for full details on data-related preparations etc. !
 
 GeoSkylines methods are called using the threading hooks via hotkeys, combination of ONLY RIGHT Ctrl + R, L, W, Q, T, V, S, Z, P, G, H, J, K. To avoid conflicts with hotkeys of other mods, it is recommended to turn off other mods before using GeoSkylines. After using import or export methods of GeoSkylines then you can turn the mod off. (Though this has been limited now to right Ctrl)
