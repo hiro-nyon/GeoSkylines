@@ -3,7 +3,7 @@ CenterLatitude: 35.681236
 CenterLongitude: 139.767125
 ExportOutputDirectory: Files/Exports
 ExportFormats: csv,geojson,shp,parquet
-ExportLayers: roads,rails,buildings,zones,trees,transit_lines,transit_stops,transit_facilities,pedestrian_areas,pedestrian_streets,pedestrian_service_points,transit_hubs,outside_connections
+ExportLayers: roads,rails,metro_tracks,tram_tracks,monorail_tracks,trolleybus_roads,pedestrian_streets,pedestrian_paths,ship_paths,fishing_paths,canals,water_pipes,transport_guideways,outside_connection_nodes,outside_connection_segments,network_nodes,network_unknown,districts,park_areas,industry_areas,campus_areas,airport_areas,pedestrian_areas,buildings,transit_facilities,transit_hubs,water_facilities,fishing_facilities,pedestrian_service_points,airport_buildings,campus_buildings,industry_buildings,outside_connection_buildings,transit_lines,transit_stops,trees,props,water_sources,zones
 ExportCliPath: /absolute/path/to/GeoSkylines.ExportCli
 ExportRunCli: true
 ExportIncludeExtendedAttributes: true

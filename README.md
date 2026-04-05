@@ -8,22 +8,26 @@ Current release target: `1.0.0-beta.1`
 - Direct export from the mod to `CSV` and `GeoJSON`
 - Optional conversion to `SHP` and `GeoParquet` through `GeoSkylines.ExportCli`
 - Batch export with `Right Ctrl + E`
+- Typed network classification so roads, rail, ship paths, canals, pedestrian networks, outside connections, and water pipes export to separate layers
+- Sampled area export for districts, parks, industry areas, campus areas, airport areas, and pedestrian areas
+- Water source export from the CS1 water simulation
 - Legacy import workflows remain available for roads, rails, trees, zones, water, and services
 
 ## Export Layers
-- `roads`
-- `rails`
-- `buildings`
-- `zones`
-- `trees`
-- `transit_lines`
-- `transit_stops`
-- `transit_facilities`
-- `pedestrian_areas`
-- `pedestrian_streets`
-- `pedestrian_service_points`
-- `transit_hubs`
-- `outside_connections`
+- Networks:
+  `roads`, `rails`, `metro_tracks`, `tram_tracks`, `monorail_tracks`, `trolleybus_roads`,
+  `pedestrian_streets`, `pedestrian_paths`, `ship_paths`, `fishing_paths`, `canals`,
+  `water_pipes`, `transport_guideways`, `outside_connection_nodes`,
+  `outside_connection_segments`, `network_nodes`, `network_unknown`
+- Areas:
+  `districts`, `park_areas`, `industry_areas`, `campus_areas`, `airport_areas`,
+  `pedestrian_areas`, `zones`
+- Buildings and facilities:
+  `buildings`, `transit_facilities`, `transit_hubs`, `water_facilities`,
+  `fishing_facilities`, `pedestrian_service_points`, `airport_buildings`,
+  `campus_buildings`, `industry_buildings`, `outside_connection_buildings`
+- Operations and environment:
+  `transit_lines`, `transit_stops`, `trees`, `props`, `water_sources`
 
 ## Output Formats
 - `csv`
@@ -45,7 +49,7 @@ An example config is available at [examples/import_export.conf.example](examples
 
 ## Hotkeys
 - `Right Ctrl + E`: batch export using configured layers and formats
-- `Right Ctrl + G`: export road and rail network layers
+- `Right Ctrl + G`: export classified network segment layers
 - `Right Ctrl + H`: export buildings
 - `Right Ctrl + J`: export zones
 - `Right Ctrl + K`: export trees
@@ -133,10 +137,11 @@ This writes `release/GeoSkylines-<version>.zip` with:
 - [examples/sample_export_manifest.json](examples/sample_export_manifest.json)
 
 ## Known Limitations
-- `pedestrian_areas` is currently a placeholder layer and may export zero features with a warning.
 - `transit_lines` and `transit_stops` use reflection to tolerate CS1 API differences, so edge cases should be tested against real saves.
+- `districts`, `park_areas`, `industry_areas`, `campus_areas`, `airport_areas`, and `pedestrian_areas` are reconstructed from sampled area grids. They are vector-safe for GIS use, but not byte-for-byte copies of internal renderer geometry.
+- `network_unknown` is intentional. It captures runtime network types that do not fit a known classifier so they are not silently dropped.
 - `SHP` and `GeoParquet` require `GeoSkylines.ExportCli`; the mod only writes `CSV` and `GeoJSON` directly.
-- Phase 2 layers such as airport areas, utility networks, park areas, campus areas, and industry areas are not implemented yet.
+- Water export is `vector only`: `water_sources`, canals, ship paths, fishing paths, and water pipes are exported, but water surfaces and water depth rasters are not.
 
 ## Attribution
 This repository modernizes the original GeoSkylines idea and codebase. See [NOTICE](NOTICE) for release-time attribution notes.

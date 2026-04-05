@@ -12,12 +12,12 @@
     "shp",
     "parquet"
   ],
-  "warnings": [
-    "pedestrian_areas currently exports an empty placeholder layer."
-  ],
+  "warnings": [],
   "layers": [
     {
       "name": "roads",
+      "source_system": "net_manager",
+      "experimental": false,
       "feature_count": 1,
       "files": [
         "SampleCity_roads.csv",
@@ -28,14 +28,38 @@
       "warnings": []
     },
     {
+      "name": "ship_paths",
+      "source_system": "net_manager",
+      "experimental": false,
+      "feature_count": 2,
+      "files": [
+        "SampleCity_ship_paths.geojson",
+        "SampleCity_ship_paths.shp",
+        "SampleCity_ship_paths.parquet"
+      ],
+      "warnings": []
+    },
+    {
       "name": "pedestrian_areas",
-      "feature_count": 0,
+      "source_system": "district_manager",
+      "experimental": false,
+      "feature_count": 1,
       "files": [
         "SampleCity_pedestrian_areas.geojson"
       ],
-      "warnings": [
-        "Layer export is reserved for a later implementation."
-      ]
+      "warnings": []
+    },
+    {
+      "name": "water_sources",
+      "source_system": "water_manager",
+      "experimental": false,
+      "feature_count": 3,
+      "files": [
+        "SampleCity_water_sources.geojson",
+        "SampleCity_water_sources.shp",
+        "SampleCity_water_sources.parquet"
+      ],
+      "warnings": []
     }
   ]
 }
