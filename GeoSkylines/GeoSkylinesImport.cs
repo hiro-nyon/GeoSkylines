@@ -102,7 +102,7 @@ namespace GeoSkylines
         }
 
         public void LoadConfiguration() {
-            string impExPath = Path.GetFullPath("Files/import_export.txt");
+            string impExPath = GeoSkylinesConfig.ResolveConfigPath();
 
             if (!File.Exists(impExPath)) {
                 panel.SetMessage("GeoSkylines", "No configuration file provided!", false);
