@@ -348,9 +348,7 @@ namespace GeoSkylines
             }
             else
             {
-                builder.Append("\"");
-                builder.Append(value.Replace("\\", "\\\\").Replace("\"", "\\\""));
-                builder.Append("\"");
+                AppendJsonString(builder, value);
             }
         }
 
@@ -365,11 +363,48 @@ namespace GeoSkylines
                     builder.Append(",");
                 }
 
-                builder.Append("\"");
-                builder.Append((value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\""));
-                builder.Append("\"");
+                AppendJsonString(builder, value ?? string.Empty);
                 first = false;
             }
             builder.Append("]");
         }
+
+        private static void AppendJsonString(StringBuilder builder, string value)
+        {
+            builder.Append("\"");
+            foreach (char ch in value)
+            {
+                switch (ch)
+                {
+                    case '\\':
+                        builder.Append("\\\\");
+                        break;
+                    case '"':
+                        builder.Append("\\\"");
+                        break;
+                    case '\r':
+                        builder.Append("\\r");
+                        break;
+                    case '\n':
+                        builder.Append("\\n");
+                        break;
+                    case '\t':
+                        builder.Append("\\t");
+                        break;
+                    default:
+                        if (ch < 32)
+                        {
+                            builder.Append("\\u");
+                            builder.Append(((int)ch).ToString("x4"));
+                        }
+                        else
+                        {
+                            builder.Append(ch);
+                        }
+                        break;
+                }
+            }
+            builder.Append("\"");
+        }
     }
+}
