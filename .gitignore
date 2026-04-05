@@ -1,4 +1,6 @@
 .vs
+.DS_Store
+.claude/
 ImageToTreesXML/bin
 ImageToTreesXML/.vs
 ImageToTreesXML/obj
@@ -6,3 +8,6 @@ GeoSkylines/bin
 GeoSkylines/.vs
 GeoSkylines/burningmime.curves
 GeoSkylines/obj
+GeoSkylines.ExportCli/bin
+GeoSkylines.ExportCli/obj
+release
