@@ -21,10 +21,12 @@ namespace GeoSkylines
         {
             GeometryType = geometryType;
             Parts = new List<List<GeoSkylinesCoordinate>>();
+            Polygons = new List<List<List<GeoSkylinesCoordinate>>>();
         }
 
         public string GeometryType { get; private set; }
         public List<List<GeoSkylinesCoordinate>> Parts { get; private set; }
+        public List<List<List<GeoSkylinesCoordinate>>> Polygons { get; private set; }
     }
 
     public sealed class GeoSkylinesFeature
@@ -51,12 +53,15 @@ namespace GeoSkylines
             Features = new List<GeoSkylinesFeature>();
             Warnings = new List<string>();
             Files = new List<string>();
+            SourceSystem = "unknown";
         }
 
         public string Name { get; private set; }
         public List<GeoSkylinesFeature> Features { get; private set; }
         public List<string> Warnings { get; private set; }
         public List<string> Files { get; private set; }
+        public string SourceSystem { get; set; }
+        public bool Experimental { get; set; }
     }
 
     public sealed class GeoSkylinesManifest

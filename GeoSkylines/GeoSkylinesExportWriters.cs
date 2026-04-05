@@ -90,7 +90,21 @@ namespace GeoSkylines
 
             if (geometry.GeometryType == "Polygon")
             {
-                return "POLYGON ((" + JoinCoordinates(geometry.Parts[0]) + "))";
+                return "POLYGON (" + string.Join(", ", geometry.Parts.Select(delegate(List<GeoSkylinesCoordinate> ring)
+                {
+                    return "(" + JoinCoordinates(ring) + ")";
+                }).ToArray()) + ")";
+            }
+
+            if (geometry.GeometryType == "MultiPolygon")
+            {
+                return "MULTIPOLYGON (" + string.Join(", ", geometry.Polygons.Select(delegate(List<List<GeoSkylinesCoordinate>> polygon)
+                {
+                    return "(" + string.Join(", ", polygon.Select(delegate(List<GeoSkylinesCoordinate> ring)
+                    {
+                        return "(" + JoinCoordinates(ring) + ")";
+                    }).ToArray()) + ")";
+                }).ToArray()) + ")";
             }
 
             return string.Empty;
@@ -185,7 +199,40 @@ namespace GeoSkylines
             else if (geometry.GeometryType == "Polygon")
             {
                 builder.Append("[");
-                WriteCoordinateArray(builder, geometry.Parts[0]);
+                for (int i = 0; i < geometry.Parts.Count; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(",");
+                    }
+
+                    WriteCoordinateArray(builder, geometry.Parts[i]);
+                }
+                builder.Append("]");
+            }
+            else if (geometry.GeometryType == "MultiPolygon")
+            {
+                builder.Append("[");
+                for (int polygonIndex = 0; polygonIndex < geometry.Polygons.Count; polygonIndex++)
+                {
+                    if (polygonIndex > 0)
+                    {
+                        builder.Append(",");
+                    }
+
+                    builder.Append("[");
+                    List<List<GeoSkylinesCoordinate>> polygon = geometry.Polygons[polygonIndex];
+                    for (int ringIndex = 0; ringIndex < polygon.Count; ringIndex++)
+                    {
+                        if (ringIndex > 0)
+                        {
+                            builder.Append(",");
+                        }
+
+                        WriteCoordinateArray(builder, polygon[ringIndex]);
+                    }
+                    builder.Append("]");
+                }
                 builder.Append("]");
             }
             else
@@ -319,6 +366,9 @@ namespace GeoSkylines
                 GeoSkylinesLayer layer = manifest.Layers[i];
                 builder.Append("{");
                 AppendProperty(builder, "name", layer.Name, true);
+                AppendProperty(builder, "source_system", layer.SourceSystem, false);
+                builder.Append(",\"experimental\":");
+                builder.Append(layer.Experimental ? "true" : "false");
                 builder.Append(",\"feature_count\":");
                 builder.Append(layer.Features.Count.ToString(CultureInfo.InvariantCulture));
                 builder.Append(",\"files\":");
