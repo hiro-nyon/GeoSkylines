@@ -318,8 +318,20 @@ namespace GeoSkylines
         {
             return GetList(ExportLayersKey, DefaultLayers)
                 .Select(delegate(string layer) { return layer.ToLowerInvariant(); })
+                .SelectMany(ExpandLegacyLayerNames)
                 .Where(delegate(string layer) { return GeoSkylinesLayerCatalog.KnownLayers.Contains(layer); })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+        }
+
+        private static IEnumerable<string> ExpandLegacyLayerNames(string layer)
+        {
+            if (layer == "outside_connections")
+            {
+                return new string[] { "outside_connection_nodes" };
+            }
+
+            return new string[] { layer };
         }
 
         private void ApplyDefaults()
