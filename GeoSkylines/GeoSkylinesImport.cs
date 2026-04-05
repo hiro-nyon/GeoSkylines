@@ -105,8 +105,9 @@ namespace GeoSkylines
             string impExPath = GeoSkylinesConfig.ResolveConfigPath();
 
             if (!File.Exists(impExPath)) {
-                panel.SetMessage("GeoSkylines", "No configuration file provided!", false);
+                panel.SetMessage("GeoSkylines", "No configuration file found.\nExpected path: " + impExPath, false);
                 confloaded = false;
+                return;
             }
 
             Dictionary<string, string> conf = new Dictionary<string, string>();
@@ -537,6 +538,8 @@ namespace GeoSkylines
                     //Debug.Log("Curve: " + road.roadName + " - " + road.roadId);
                 }
             }
+
+            confloaded = true;
         }
 
         public void ObtainCSNode(out ushort netNodeId, Vector2 pos, NetInfo ni) {
