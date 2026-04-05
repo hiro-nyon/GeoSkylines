@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using UnityEngine;
 
 namespace GeoSkylines
 {
@@ -20,22 +21,7 @@ namespace GeoSkylines
         public string ConfigPath { get; private set; }
 
         public static readonly string[] DefaultFormats = new string[] { "csv", "geojson" };
-        public static readonly string[] DefaultLayers = new string[]
-        {
-            "roads",
-            "rails",
-            "buildings",
-            "zones",
-            "trees",
-            "transit_lines",
-            "transit_stops",
-            "transit_facilities",
-            "pedestrian_areas",
-            "pedestrian_streets",
-            "pedestrian_service_points",
-            "transit_hubs",
-            "outside_connections"
-        };
+        public static readonly string[] DefaultLayers = GeoSkylinesLayerCatalog.AllLayers;
 
         private GeoSkylinesConfig()
         {
@@ -79,6 +65,8 @@ namespace GeoSkylines
             }
 
             config.ApplyDefaults();
+            config.ApplySaveOverrides();
+            config.ApplyCurrentCenterState();
             return config;
         }
 
@@ -102,7 +90,93 @@ namespace GeoSkylines
 
         public static string GetFilesDirectory()
         {
+            List<string> candidates = GetFilesDirectoryCandidates();
+            foreach (string candidate in candidates)
+            {
+                if (Directory.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            if (candidates.Count > 0)
+            {
+                return candidates[0];
+            }
+
             return Path.GetFullPath("Files");
+        }
+
+        private static List<string> GetFilesDirectoryCandidates()
+        {
+            List<string> candidates = new List<string>();
+
+            AddCandidate(candidates, Environment.GetEnvironmentVariable("GEOSKYLINES_FILES_DIR"));
+            AddCandidate(candidates, Path.Combine(Directory.GetCurrentDirectory(), "Files"));
+            AddCandidate(candidates, Path.Combine(AppDomain.CurrentDomain.BaseDirectory ?? string.Empty, "Files"));
+
+            string dataPath = string.Empty;
+            try
+            {
+                dataPath = Application.dataPath;
+            }
+            catch
+            {
+                dataPath = string.Empty;
+            }
+
+            if (!string.IsNullOrEmpty(dataPath))
+            {
+                AddCandidate(candidates, Path.Combine(Path.Combine(dataPath, "Resources"), "Files"));
+                AddCandidate(candidates, Path.Combine(dataPath, "Files"));
+
+                string dataParent = Path.GetDirectoryName(dataPath);
+                if (!string.IsNullOrEmpty(dataParent))
+                {
+                    AddCandidate(candidates, Path.Combine(dataParent, "Files"));
+                    AddCandidate(candidates, Path.Combine(Path.Combine(dataParent, "Resources"), "Files"));
+
+                    string appParent = Path.GetDirectoryName(dataParent);
+                    if (!string.IsNullOrEmpty(appParent))
+                    {
+                        AddCandidate(candidates, Path.Combine(Path.Combine(appParent, "Resources"), "Files"));
+                    }
+                }
+            }
+
+            string homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Personal);
+            if (!string.IsNullOrEmpty(homeDirectory))
+            {
+                AddCandidate(candidates, Path.Combine(homeDirectory, "Library/Application Support/Steam/steamapps/common/Cities_Skylines/Cities.app/Contents/Resources/Files"));
+                AddCandidate(candidates, Path.Combine(homeDirectory, "Library/Application Support/Steam/steamapps/common/Cities_Skylines/Files"));
+            }
+
+            AddCandidate(candidates, @"C:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Files");
+
+            return candidates;
+        }
+
+        private static void AddCandidate(List<string> candidates, string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            string normalizedPath;
+            try
+            {
+                normalizedPath = Path.GetFullPath(path);
+            }
+            catch
+            {
+                return;
+            }
+
+            if (!candidates.Contains(normalizedPath, StringComparer.OrdinalIgnoreCase))
+            {
+                candidates.Add(normalizedPath);
+            }
         }
 
         public string GetValue(string key, string defaultValue)
@@ -244,6 +318,7 @@ namespace GeoSkylines
         {
             return GetList(ExportLayersKey, DefaultLayers)
                 .Select(delegate(string layer) { return layer.ToLowerInvariant(); })
+                .Where(delegate(string layer) { return GeoSkylinesLayerCatalog.KnownLayers.Contains(layer); })
                 .ToArray();
         }
 
@@ -278,6 +353,40 @@ namespace GeoSkylines
             {
                 values.Add(ExportIncludeExtendedAttributesKey, "false");
             }
+        }
+
+        private void ApplySaveOverrides()
+        {
+            GeoSkylinesCenterState centerState;
+            if (!GeoSkylinesSaveState.TryGetCenterState(out centerState))
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(centerState.MapName))
+            {
+                SetValue("MapName", centerState.MapName);
+            }
+
+            SetValue("CenterLatitude", centerState.CenterLatitude.ToString("R", CultureInfo.InvariantCulture));
+            SetValue("CenterLongitude", centerState.CenterLongitude.ToString("R", CultureInfo.InvariantCulture));
+        }
+
+        private void ApplyCurrentCenterState()
+        {
+            double centerLatitude;
+            double centerLongitude;
+            if (!double.TryParse(GetValue("CenterLatitude", string.Empty), NumberStyles.Float, CultureInfo.InvariantCulture, out centerLatitude))
+            {
+                return;
+            }
+
+            if (!double.TryParse(GetValue("CenterLongitude", string.Empty), NumberStyles.Float, CultureInfo.InvariantCulture, out centerLongitude))
+            {
+                return;
+            }
+
+            GeoSkylinesSaveState.SetCenterState(GetValue("MapName", "GeoSkylines"), centerLatitude, centerLongitude);
         }
     }
 }
