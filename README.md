@@ -1,6 +1,11 @@
 # GeoSkylines general info
 Cities: Skylines game mod for import/export of geodata. 
 
+The export pipeline now supports:
+- direct `CSV` and `GeoJSON` output from the mod
+- optional `SHP` and `GeoParquet` conversion through the bundled `GeoSkylines.ExportCli`
+- batch export via `Right Ctrl + E`
+
 Install game mod (if not on Steam workshop):
 - use the provided GeoSkylines.dll
 - if you want to compile the code you need also additional code from burningmime: https://github.com/burningmime/curves/tree/master/burningmime.curves
@@ -94,25 +99,45 @@ GeoSkylinesImport.ImportBuildings():
 - Note: this method is not used due to many complications. Difficult to calculate the right rotation angle, buildings are offten to close to the roads, and mainly: creating buildings directly goes against the game logic where only zones are set. Although this can be overcome by mods, it was still quite unusable. 
 
 # Export methods of GeoSkylines mod
+GeoSkylinesExport.BatchExportConfiguredLayers():
+- Run by hotkey combo: right Ctrl + E
+- Requires: import_export.conf (or legacy import_export.txt)
+- Description: exports all layers listed in `ExportLayers` into all formats listed in `ExportFormats`, writes an `export_manifest.json`, and optionally invokes the CLI for `shp` / `parquet`.
+
 GeoSkylinesExport.ExportSegments(): 
 - Run by hotkey combo: right Ctrl + G
-- Requires: import_export.txt
-- Description: loops over all roads created in the game and exports them as GIS data (CSV format, geometry in WKT, any meaningful information about the road as attributes). 
+- Requires: import_export.conf (or legacy import_export.txt)
+- Description: exports roads and rails using the new feature pipeline. CSV is still written for backward compatibility and GeoJSON is available when enabled in `ExportFormats`. 
 
 GeoSkylinesExport.ExportBuildings():
 - Run by hotkey combo: right Ctrl + H
-- Requires: import_export.txt
-- Description: loops over all buildings created in the game and exports them as GIS data (CSV format, geometry in WKT, any meaningful information about the building as attributes).
+- Requires: import_export.conf (or legacy import_export.txt)
+- Description: exports building footprints as GIS features with core attributes and optional extended attributes.
 
 GeoSkylinesExport.ExportZones():
 - Run by hotkey combo: right Ctrl + J
-- Requires: import_export.txt
-- Description: loops over all zones created in the game and exports them as GIS data (CSV format, geometry in WKT, any meaningful information about the zone as attributes).
+- Requires: import_export.conf (or legacy import_export.txt)
+- Description: exports zone blocks as GIS polygon features.
 
 GeoSkylinesExport.ExportTrees():
 - Run by hotkey combo: right Ctrl + K
-- Requires: import_export.txt
-- Description: loops over all trees created in the game and exports them as GIS data (CSV format, geometry in WKT, any meaningful information about the tree as attributes).
+- Requires: import_export.conf (or legacy import_export.txt)
+- Description: exports tree instances as GIS point features.
+
+Additional batch-export layers available through `ExportLayers`:
+- roads
+- rails
+- buildings
+- zones
+- trees
+- transit_lines
+- transit_stops
+- transit_facilities
+- pedestrian_areas
+- pedestrian_streets
+- pedestrian_service_points
+- transit_hubs
+- outside_connections
 
 # Helper methods of GeoSkylines mod
 GeoSkylinesExport.DisplayLLOnMouseClick():
@@ -127,9 +152,15 @@ GeoSkylinesExport.OutputPrefabInfo():
 - Note: this is valuable for creating the match CSV files and setting some variables in import_export.txt
 
 # Configuration of import and export methods
-CSV files for import, CSV files for matching types of objects, trees.png file, trees.xml and import_export.txt file have to be stored in folder: c:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Files\. This folder is also used to store CSV files to output game objects as GIS data using the export methods (e.g. roads_cs.csv). 
+CSV files for import, CSV files for matching types of objects, trees.png file, trees.xml and import/export config have to be stored in folder: c:\Program Files (x86)\Steam\steamapps\common\Cities_Skylines\Files\. Use `import_export.conf` as the canonical file name; `import_export.txt` is still accepted for backward compatibility. This folder is also used to store legacy CSV aliases such as `roads_cs.csv`. 
 
-File import_export.txt lists parameters for configurying the import and export methods. Here's the complete list of parameters. 
+File `import_export.conf` lists parameters for configuring the import and export methods. Legacy `import_export.txt` is still read. In addition to the original parameters, the export pipeline recognizes:
+- ExportOutputDirectory
+- ExportFormats
+- ExportLayers
+- ExportCliPath
+- ExportRunCli
+- ExportIncludeExtendedAttributes
 
 MapName: 
 - Description: not used in the code, just a label for distinguishing the file from others
