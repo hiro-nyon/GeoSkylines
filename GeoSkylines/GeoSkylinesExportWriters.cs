@@ -64,24 +64,39 @@ namespace GeoSkylines
 
         public static string ToWkt(GeoSkylinesGeometry geometry)
         {
-            if (geometry == null || geometry.Parts.Count == 0 || geometry.Parts[0].Count == 0)
+            if (geometry == null)
             {
                 return string.Empty;
             }
 
             if (geometry.GeometryType == "Point")
             {
+                if (geometry.Parts.Count == 0 || geometry.Parts[0].Count == 0)
+                {
+                    return string.Empty;
+                }
+
                 GeoSkylinesCoordinate point = geometry.Parts[0][0];
                 return string.Format(CultureInfo.InvariantCulture, "POINT ({0} {1})", point.Longitude, point.Latitude);
             }
 
             if (geometry.GeometryType == "LineString")
             {
+                if (geometry.Parts.Count == 0 || geometry.Parts[0].Count == 0)
+                {
+                    return string.Empty;
+                }
+
                 return "LINESTRING (" + JoinCoordinates(geometry.Parts[0]) + ")";
             }
 
             if (geometry.GeometryType == "MultiLineString")
             {
+                if (geometry.Parts.Count == 0)
+                {
+                    return string.Empty;
+                }
+
                 return "MULTILINESTRING (" + string.Join(", ", geometry.Parts.Select(delegate(List<GeoSkylinesCoordinate> part)
                 {
                     return "(" + JoinCoordinates(part) + ")";
@@ -90,6 +105,11 @@ namespace GeoSkylines
 
             if (geometry.GeometryType == "Polygon")
             {
+                if (geometry.Parts.Count == 0)
+                {
+                    return string.Empty;
+                }
+
                 return "POLYGON (" + string.Join(", ", geometry.Parts.Select(delegate(List<GeoSkylinesCoordinate> ring)
                 {
                     return "(" + JoinCoordinates(ring) + ")";
@@ -98,6 +118,11 @@ namespace GeoSkylines
 
             if (geometry.GeometryType == "MultiPolygon")
             {
+                if (geometry.Polygons == null || geometry.Polygons.Count == 0)
+                {
+                    return string.Empty;
+                }
+
                 return "MULTIPOLYGON (" + string.Join(", ", geometry.Polygons.Select(delegate(List<List<GeoSkylinesCoordinate>> polygon)
                 {
                     return "(" + string.Join(", ", polygon.Select(delegate(List<GeoSkylinesCoordinate> ring)
