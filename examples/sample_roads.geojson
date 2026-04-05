@@ -1,0 +1,31 @@
+{
+  "type": "FeatureCollection",
+  "name": "roads",
+  "crs": {
+    "type": "name",
+    "properties": {
+      "name": "EPSG:4326"
+    }
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "12",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [139.76595, 35.68051],
+          [139.76642, 35.68067],
+          [139.76697, 35.68084]
+        ]
+      },
+      "properties": {
+        "name": "Sample Avenue",
+        "service": "Road",
+        "sub_service": "BasicRoad",
+        "lane_count": 4,
+        "one_way": false
+      }
+    }
+  ]
+}

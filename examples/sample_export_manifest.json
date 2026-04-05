@@ -1,0 +1,41 @@
+{
+  "generated_at_utc": "2026-04-05T12:00:00.0000000Z",
+  "map_name": "SampleCity",
+  "output_directory": "/absolute/path/to/Files/Exports",
+  "config_path": "/absolute/path/to/Files/import_export.conf",
+  "cli_path": "/absolute/path/to/GeoSkylines.ExportCli",
+  "cli_exit_code": "0",
+  "cli_output": "Processed 1 GeoJSON file(s).",
+  "formats": [
+    "csv",
+    "geojson",
+    "shp",
+    "parquet"
+  ],
+  "warnings": [
+    "pedestrian_areas currently exports an empty placeholder layer."
+  ],
+  "layers": [
+    {
+      "name": "roads",
+      "feature_count": 1,
+      "files": [
+        "SampleCity_roads.csv",
+        "SampleCity_roads.geojson",
+        "SampleCity_roads.shp",
+        "SampleCity_roads.parquet"
+      ],
+      "warnings": []
+    },
+    {
+      "name": "pedestrian_areas",
+      "feature_count": 0,
+      "files": [
+        "SampleCity_pedestrian_areas.geojson"
+      ],
+      "warnings": [
+        "Layer export is reserved for a later implementation."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+MapName: SampleCity
+CenterLatitude: 35.681236
+CenterLongitude: 139.767125
+ExportOutputDirectory: Files/Exports
+ExportFormats: csv,geojson,shp,parquet
+ExportLayers: roads,rails,buildings,zones,trees,transit_lines,transit_stops,transit_facilities,pedestrian_areas,pedestrian_streets,pedestrian_service_points,transit_hubs,outside_connections
+ExportCliPath: /absolute/path/to/GeoSkylines.ExportCli
+ExportRunCli: true
+ExportIncludeExtendedAttributes: true

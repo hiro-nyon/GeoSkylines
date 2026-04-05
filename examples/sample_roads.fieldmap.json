@@ -1,0 +1,7 @@
+{
+  "name": "name",
+  "service": "service",
+  "sub_service": "sub_servic",
+  "lane_count": "lane_count",
+  "one_way": "one_way"
+}
