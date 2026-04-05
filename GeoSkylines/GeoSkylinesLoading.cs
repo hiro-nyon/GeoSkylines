@@ -345,13 +345,13 @@ namespace GeoSkylines
 
         public void OnLevelUnloading()
         {
-
+            GeoSkylinesSaveState.Clear();
         }
 
         //called when unloading finished
         public void OnReleased()
         {
-
+            GeoSkylinesSaveState.Clear();
         }
     }
 }
