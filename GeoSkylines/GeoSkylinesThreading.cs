@@ -280,6 +280,29 @@ namespace GeoSkylines
                 _processed = false;
             }
 
+            // batch export configured layers
+            if (Input.GetKey(KeyCode.RightControl) && Input.GetKey(KeyCode.E))
+            {
+                if (_processed) return;
+
+                _processed = true;
+
+                GeoSkylinesExport exp = new GeoSkylinesExport();
+                string msg = "Parameters: \n";
+                msg += exp.OutputConfiguration();
+
+                ConfirmPanel.ShowModal("GeoSkylines: Batch export", msg, (s, r) =>
+                {
+                    if (r != 1)
+                        return;
+                    exp.BatchExportConfiguredLayers();
+                });
+            }
+            else
+            {
+                _processed = false;
+            }
+
             // export buildings
             if (Input.GetKey(KeyCode.RightControl) && Input.GetKey(KeyCode.H))
             {
