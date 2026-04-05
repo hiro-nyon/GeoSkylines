@@ -1,1095 +1,1330 @@
-﻿using System;
-using System.IO;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
 using System.Linq;
-using System.Text;
-using ColossalFramework.UI;
-using ICities;
-using UnityEngine;
-using System.Collections;
-using ColossalFramework.Math;
+using System.Reflection;
 using ColossalFramework;
-using System.Drawing.Printing;
+using ColossalFramework.Math;
+using ColossalFramework.UI;
+using UnityEngine;
 
 namespace GeoSkylines
 {
     public class GeoSkylinesExport
     {
-        private Randomizer rand;
-        private Dictionary<short, List<GeoSkylinesNode>> nodeMap = new Dictionary<short, List<GeoSkylinesNode>>();
+        private sealed class TransportLineSnapshot
+        {
+            public ushort LineId;
+            public string Name;
+            public string TransportType;
+            public List<ushort> Stops = new List<ushort>();
+        }
 
-        private WGS84_UTM convertor = new WGS84_UTM(null);
+        private readonly WGS84_UTM convertor = new WGS84_UTM(null);
+        private readonly ExceptionPanel panel = UIView.library.ShowModal<ExceptionPanel>("ExceptionPanel");
+        private readonly NetManager netManager = NetManager.instance;
+        private readonly BuildingManager buildingManager = BuildingManager.instance;
+        private readonly TerrainManager terrainManager = TerrainManager.instance;
+        private readonly GeoSkylinesConfig config;
+        private readonly Dictionary<ushort, TransportLineSnapshot> transportLines = new Dictionary<ushort, TransportLineSnapshot>();
+        private readonly List<string> transportWarnings = new List<string>();
+
         private UTMResult centerUTM;
-        private string ZoneLetter;
+        private string zoneLetter = "N";
         private string mapName;
         private double centerLat;
         private double centerLon;
-        private float exportXMin = -8640;
-        private float exportXMax = 8640;
-        private float exportYMin = -8640;
-        private float exportYMax = 8640;
-
-        private ExceptionPanel panel = UIView.library.ShowModal<ExceptionPanel>("ExceptionPanel");
+        private float exportXMin = -8640f;
+        private float exportXMax = 8640f;
+        private float exportYMin = -8640f;
+        private float exportYMax = 8640f;
         private bool confloaded;
-
-        private NetManager net_manager = NetManager.instance;
-        BuildingManager bld_manager = BuildingManager.instance;
-        private TerrainManager tm = TerrainManager.instance;
+        private bool includeExtendedAttributes;
+        private bool transportCacheLoaded;
 
         public GeoSkylinesExport()
         {
+            config = GeoSkylinesConfig.Load();
             LoadConfiguration();
-            
-            centerUTM = convertor.convertLatLngToUtm(centerLat, centerLon);
 
-            ZoneLetter = "S";
-            if (centerLat > 0)
-                ZoneLetter = "N";
+            if (confloaded)
+            {
+                centerUTM = convertor.convertLatLngToUtm(centerLat, centerLon);
+                zoneLetter = centerLat >= 0 ? "N" : "S";
+            }
         }
 
         public void LoadConfiguration()
         {
-            string impExPath = Path.GetFullPath("Files/import_export.conf");
-
-            if (!File.Exists(impExPath))
+            string configPath = config.ConfigPath;
+            if (!File.Exists(configPath))
             {
                 panel.SetMessage("GeoSkylines", "No configuration file provided!", false);
                 confloaded = false;
+                return;
             }
 
-            
-            Dictionary<string, string> conf = new Dictionary<string, string>();
-            using(StreamReader confSr = File.OpenText(impExPath)){
-                while (!confSr.EndOfStream)
-                {
-                    string[] keyVal = confSr.ReadLine().Split(':');
-                    if (keyVal.Length == 2)
-                        conf.Add(keyVal[0], keyVal[1]);
-                }
-            }
-            
+            mapName = config.GetValue("MapName", "GeoSkylines");
+            centerLat = config.GetDouble("CenterLatitude", 0d);
+            centerLon = config.GetDouble("CenterLongitude", 0d);
+            includeExtendedAttributes = config.GetBool(GeoSkylinesConfig.ExportIncludeExtendedAttributesKey, false);
 
-            foreach (KeyValuePair<string, string> a_conf in conf)
+            string exportBox = config.GetValue("ExportCoordsBox", string.Empty);
+            if (!string.IsNullOrEmpty(exportBox))
             {
-                var val = a_conf.Value;
-                var key = a_conf.Key;
-
-                if (key == "MapName")
-                    mapName = val;
-                else if (key == "CenterLatitude")
-                    double.TryParse(val, out centerLat);
-                else if (key == "CenterLongitude")
-                    double.TryParse(val, out centerLon);
-                else if (key == "ExportCoordsBox")
+                string[] coords = exportBox.Split(',').Select(delegate(string part) { return part.Trim(); }).ToArray();
+                if (coords.Length == 4)
                 {
-                    var coords = val.Split(',').Select(p => p.Trim()).ToArray();
-                    if (coords.Length == 4)
-                    {
-                        float exportXMin_tmp;
-                        float exportYMin_tmp;
-                        float exportXMax_tmp;
-                        float exportYMax_tmp;
-                        float.TryParse(coords[0], out exportXMin_tmp);
-                        if (exportXMin_tmp != 0)
-                            exportXMin = exportXMin_tmp;
-
-                        float.TryParse(coords[1], out exportYMin_tmp);
-                        if (exportYMin_tmp != 0)
-                            exportYMin = exportYMin_tmp;
-
-                        float.TryParse(coords[2], out exportXMax_tmp);
-                        if (exportXMax_tmp != 0)
-                            exportXMax = exportXMax_tmp;
-
-                        float.TryParse(coords[3], out exportYMax_tmp);
-                        if (exportYMax_tmp != 0)
-                            exportYMax = exportYMax_tmp;
-                    }
+                    exportXMin = ParseFloatOrDefault(coords[0], exportXMin);
+                    exportYMin = ParseFloatOrDefault(coords[1], exportYMin);
+                    exportXMax = ParseFloatOrDefault(coords[2], exportXMax);
+                    exportYMax = ParseFloatOrDefault(coords[3], exportYMax);
                 }
-
             }
 
             confloaded = true;
         }
 
-        //public bool FindNode(out ushort netNodeId, Vector2 node)
-        //{
-        //    short xRound = (short)Math.Round(node.x);
-
-        //    if (nodeMap.ContainsKey(xRound))
-        //    {
-        //        foreach (InputNode sn in nodeMap[xRound])
-        //        {
-        //            // try to connect with near nodes
-        //            var xDiff = Mathf.Abs(sn.position.x - node.x);
-        //            var zDiff = Mathf.Abs(sn.position.y - node.y);
-        //            if (xDiff < 0.5)
-        //            {
-        //                if (zDiff < 0.5)
-        //                {
-        //                    netNodeId = sn.nodeId;
-        //                    return true;
-        //                }
-        //            }
-        //            //if (node.nodeCoords[0] == nodeCoords[0])
-        //            //    if (node.nodeCoords[1] == nodeCoords[1])
-        //            //    {
-        //            //        netNodeId = node.nodeId;
-        //            //        return true;
-        //            //    }
-        //        }
-        //    }
-
-        //    netNodeId = 0;
-        //    return false;
-        //}
+        public void ExportSegments()
+        {
+            ExecuteExport(new string[] { "roads", "rails" });
+        }
 
         public void ExportBuildings()
         {
-            if (!confloaded)
-                return;
-
-            string columns = "Id,Geometry,Boundary";
-            var a_type = typeof(Building);
-            var properties = a_type.GetProperties();
-            foreach (var prop in properties)
-            {
-                columns += string.Format(",{0}", prop.Name);
-            }
-            columns += ",Service,SubService";            
-
-            List<string> txtLines = new List<string>
-                {
-                    columns
-                };
-            
-            Building[] bldgs = bld_manager.m_buildings.m_buffer;            
-            foreach (var a_bldg in bldgs)
-            {
-                if (a_bldg.m_position.y == 0)
-                    continue;
-
-                if (a_bldg.Info is null)
-                    continue;
-
-                if (!WithinExportCoords(a_bldg.m_position))
-                    continue;
-
-                txtLines.Add(ExportBuilding(a_bldg, ref properties));
-            }
-
-            string outputFilePath = Path.GetFullPath("Files/buildings_cs.csv");
-
-            StreamWriter outputFile = new StreamWriter(outputFilePath, false, new UTF8Encoding(true));
-            foreach (var lineTxt in txtLines)
-            {
-                outputFile.WriteLine(lineTxt);
-            }
-            outputFile.Close();
-
-            panel.SetMessage("GeoSkylines", "Buildings export completed. ", false);
-        }
-
-        public string ExportBuilding(Building a_bldg, ref System.Reflection.PropertyInfo[] properties)
-        {
-            LatLng centroidLL = GamePosition2LatLng(a_bldg.m_position);
-
-            var centroidWkt = CreateWkt(new LatLng[] { centroidLL });
-
-            // creating a boundary (courtesy of Cimtographer)
-            int width = a_bldg.Width;
-            int length = a_bldg.Length;
-
-            Vector3 a = new Vector3(Mathf.Cos(a_bldg.m_angle), 0f, Mathf.Sin(a_bldg.m_angle)) * 8f;
-            Vector3 a2 = new Vector3(a.z, 0f, -a.x);
-            Vector3 startEndcorner = a_bldg.m_position - (float)width * 0.5f * a - (float)length * 0.5f * a2;
-            Vector3[] corners = new Vector3[]
-            {
-                        startEndcorner,
-                        a_bldg.m_position + (float)width * 0.5f * a - (float)length * 0.5f * a2,
-                        a_bldg.m_position + (float)width * 0.5f * a + (float)length * 0.5f * a2,
-                        a_bldg.m_position - (float)width * 0.5f * a + (float)length * 0.5f * a2,
-                        startEndcorner
-            };
-
-            LatLng[] cornersLL = new LatLng[corners.Length];
-            for (int i = 0; i < corners.Length; i++)
-            {
-                LatLng a_cornerLL = GamePosition2LatLng(corners[i]);
-                cornersLL[i] = a_cornerLL;
-            }
-
-            var boundaryWkt = CreateWkt(cornersLL);
-
-            string rowTxt = string.Format("{0},{1},{2}", a_bldg.m_buildIndex, centroidWkt, boundaryWkt);
-            foreach (var prop in properties)
-            {
-                var prop_val = prop.GetValue(a_bldg, null);
-                if (prop_val is null)
-                    continue;
-                if (prop_val.ToString().Contains(","))
-                    prop_val = "\"" + prop_val.ToString() + "\"";
-                rowTxt += string.Format(",{0}", prop_val);
-            }
-            rowTxt += string.Format(",{0},{1}", a_bldg.Info.m_class.m_service, a_bldg.Info.m_class.m_subService);
-            return rowTxt;
-        }
-
-        public void ExportSegments()
-        {
-            if (!confloaded)
-                return;
-
-            string columns = "Id,Name,Geometry,ElevationS,ElevationE";
-
-            var a_type = typeof(NetSegment);
-            var properties = a_type.GetProperties();
-            foreach (var prop in properties)
-            {
-                columns = columns + string.Format(",{0}", prop.Name);
-            }
-
-            List<string> txtLines = new List<string>
-                {
-                    columns
-                };
-
-            List<string> txtLinesRail = new List<string>
-                {
-                    columns
-                };
-
-            NetSegment[] segments = net_manager.m_segments.m_buffer;
-            for (int i = 0; i < segments.Length; i++)
-            {
-                var a_seg = segments[i];
-
-                if (a_seg.m_startNode == 0 || a_seg.m_endNode == 0)
-                    continue;
-
-                string infoTxt = a_seg.Info.ToString();
-                if (infoTxt.Contains("Water Pipe"))
-                    continue;
-
-                if (!WithinExportCoords(a_seg.m_middlePosition))
-                    continue;
-
-                if (infoTxt.Contains("Train Line") || infoTxt.Contains("Train Track"))
-                    txtLinesRail.Add(ExportSegment(a_seg, ref i, ref properties));
-                else
-                    txtLines.Add(ExportSegment(a_seg, ref i, ref properties));
-            }
-
-            string outputRoadsPath = Path.GetFullPath("Files/roads_cs.csv");
-            StreamWriter outputFile = new StreamWriter(outputRoadsPath, false, new UTF8Encoding(true));
-            foreach (var lineTxt in txtLines)
-            {
-                outputFile.WriteLine(lineTxt);
-            }
-            outputFile.Close();
-
-            if (txtLinesRail.Count > 1)
-            {
-                string outputRailsPath = Path.GetFullPath("Files/rails_cs.csv");
-                StreamWriter outputFileRail = new StreamWriter(outputRailsPath, false, new UTF8Encoding(true));
-                foreach (var lineTxt in txtLinesRail)
-                {
-                    outputFileRail.WriteLine(lineTxt);
-                }
-                outputFileRail.Close();
-            }
-
-            panel.SetMessage("GeoSkylines", "Segments export completed. ", false);
-        }
-
-        public string ExportSegment(NetSegment a_seg, ref int segId, ref System.Reflection.PropertyInfo[] properties)
-        {
-            var startNodeId = a_seg.m_startNode;
-            var endNodeId = a_seg.m_endNode;
-            var startDirection = a_seg.m_startDirection;
-            var endDirection = a_seg.m_endDirection;
-
-            if ((a_seg.m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None)
-            {
-                startNodeId = a_seg.m_endNode;
-                endNodeId = a_seg.m_startNode;
-                startDirection = a_seg.m_endDirection;
-                endDirection = a_seg.m_startDirection;
-            }
-
-            var road_name = net_manager.GetSegmentName((ushort)segId);
-            if (road_name == null || road_name == "")
-                road_name = "no name " + segId.ToString();
-
-            var startPos = net_manager.m_nodes.m_buffer[startNodeId].m_position;
-            LatLng startRwoLL = GamePosition2LatLng(startPos);
-
-            var endPos = net_manager.m_nodes.m_buffer[endNodeId].m_position;
-            LatLng endRwoLL = GamePosition2LatLng(endPos);
-
-            string wkt = "";
-            if (Vector3.Angle(startDirection, -endDirection) > 3f)
-            {
-                Vector3 a = Vector3.zero;
-                Vector3 b = Vector3.zero;
-                NetSegment.CalculateMiddlePoints(startPos, startDirection, endPos, endDirection, false, false, out a, out b);
-                var bezier = new Bezier3(startPos, a, b, endPos);
-
-                var p1 = bezier.Position(0.25f);
-                var p1RwoLL = GamePosition2LatLng(p1);
-                var p2 = bezier.Position(0.5f);
-                var p2RwoLL = GamePosition2LatLng(p2);
-                var p3 = bezier.Position(0.5f);
-                var p3RwoLL = GamePosition2LatLng(p3);
-
-                LatLng[] listOfPositions = new LatLng[] { startRwoLL, p1RwoLL, p2RwoLL, p3RwoLL, endRwoLL };
-
-                wkt = CreateWkt(listOfPositions);
-            }
-            else
-            {
-                wkt = CreateWkt(new LatLng[] { startRwoLL, endRwoLL });
-            }
-
-            float tmpY = tm.SampleRawHeightSmoothWithWater(startPos, false, 0f);
-            float elevS = startPos.y - tmpY;
-            tmpY = tm.SampleRawHeightSmoothWithWater(endPos, false, 0f);
-            float elevE = endPos.y - tmpY;
-
-            string rowTxt = string.Format("{0},{1},{2},{3},{4}", segId, road_name, wkt, elevS, elevE);
-
-            string field_info = "";
-            foreach (var prop in properties)
-            {
-                var prop_val = prop.GetValue(a_seg, null);
-                if (prop_val.ToString().Contains(","))
-                    prop_val = "\"" + prop_val.ToString() + "\"";
-                field_info += string.Format(",{0}", prop_val);
-            }
-            rowTxt += field_info;
-            return rowTxt;
+            ExecuteExport(new string[] { "buildings" });
         }
 
         public void ExportZones()
         {
-            if (!confloaded)
-                return;
-
-            string columns = "Id,Boundary,Zone";
-            //var a_type = typeof(ZoneBlock);
-            //var properties = a_type.GetProperties();
-            //foreach (var prop in properties)
-            //{
-            //    columns += string.Format(",{0}", prop.Name);
-            //}
-
-            List<string> txtLines = new List<string>
-                {
-                    columns
-                };
-
-            var zm = ZoneManager.instance;
-            string debugMsg = "";
-            for (int i = 0; i < zm.m_blocks.m_buffer.Length; i++)
-            {
-                var zoneBlock = zm.m_blocks.m_buffer[i];
-                var pos = zoneBlock.m_position;
-                if (pos == Vector3.zero)
-                    continue;
-
-                if (!WithinExportCoords(pos))
-                    continue;
-
-                Dictionary<ItemClass.Zone, ushort> zones_count = new Dictionary<ItemClass.Zone, ushort>();
-                //int num = (int)((zoneBlock.m_flags & 65280u) >> 8);
-                for (int z = 0; z < zoneBlock.RowCount; z++)
-                    for (int x = 0; x < 4; x++)
-                    {
-                        var zone = zoneBlock.GetZone(x, z);
-                        if (!zones_count.ContainsKey(zone))
-                            zones_count.Add(zone, 0);
-                        zones_count[zone] += 1;
-                    }
-
-                ItemClass.Zone zoneMax = ItemClass.Zone.Unzoned;
-                ushort zoneMax_cnt = 0;
-                foreach (KeyValuePair<ItemClass.Zone, ushort> a_zoneCount in zones_count)
-                {
-                    if (a_zoneCount.Value > zoneMax_cnt)
-                    {
-                        zoneMax_cnt = a_zoneCount.Value;
-                        zoneMax = a_zoneCount.Key;
-                    }
-                }
-
-                int width = 4;
-                int length = zoneBlock.RowCount;
-
-                Vector3 a = new Vector3(Mathf.Cos(zoneBlock.m_angle), 0f, Mathf.Sin(zoneBlock.m_angle)) * 8f;
-                Vector3 a2 = new Vector3(a.z, 0f, -a.x);
-                Vector3 startEndcorner = pos - (float)width * 0.5f * a - (float)length * 0.5f * a2;
-                Vector3[] corners = new Vector3[]
-                {
-                        startEndcorner,
-                        pos + (float)width * 0.5f * a - (float)length * 0.5f * a2,
-                        pos + (float)width * 0.5f * a + (float)length * 0.5f * a2,
-                        pos - (float)width * 0.5f * a + (float)length * 0.5f * a2,
-                        startEndcorner
-                };
-
-                LatLng[] cornersLL = new LatLng[corners.Length];
-                for (int j = 0; j < corners.Length; j++)
-                {
-                    LatLng a_cornerLL = GamePosition2LatLng(corners[j]);
-                    cornersLL[j] = a_cornerLL;
-                }
-
-                var boundaryWkt = CreateWkt(cornersLL);
-
-                string rowTxt = string.Format("{0},{1},{2}", i, boundaryWkt, zoneMax);
-
-                txtLines.Add(rowTxt);
-            }
-
-            string outputFilePath = Path.GetFullPath("Files/zones_cs.csv");
-            StreamWriter outputFile = new StreamWriter(outputFilePath, false, new UTF8Encoding(true));
-            foreach (var lineTxt in txtLines)
-            {
-                outputFile.WriteLine(lineTxt);
-            }
-            outputFile.Close();
-
-            panel.SetMessage("GeoSkylines", "Zones export completed. ", false);
-
-            //Debug.Log(debugMsg);
-        }
-
-        // for debug only
-        public void ExportZoneBlocks2()
-        {
-            var zm = ZoneManager.instance;
-            string debugMsg = "";
-            for (int i = 0; i < zm.m_blocks.m_buffer.Length; i++)
-            {
-                var zoneBlock = zm.m_blocks.m_buffer[i];
-                if (zoneBlock.m_position == Vector3.zero)
-                    continue;
-
-                debugMsg += "zoneBlockId: " + i;
-                debugMsg += "\n";
-                debugMsg += "Distance: " + zoneBlock.Distance + ", RowCount: " + zoneBlock.RowCount;
-                debugMsg += "\n";
-                debugMsg += "zoneBlock.m_zone1: " + zoneBlock.m_zone1 + " zoneBlock.m_zone2: " + zoneBlock.m_zone2;
-                debugMsg += "\n";
-                int num = (int)((zoneBlock.m_flags & 65280u) >> 8);
-                debugMsg += "weird num: " + num;
-                debugMsg += "\n";
-                for (int z = 0; z < num; z++)
-                    for (int x = 0; x < 4; x++)
-                    {
-                        var zone = zoneBlock.GetZone(x, z);
-                        //SetZone(x, z, z.m_zone)
-                        debugMsg += "x: " + x + ", z: " + z + ", zone: " + zone.ToString();
-                        debugMsg += "\n";
-                    }                
-                debugMsg += "\n";
-                debugMsg += "\n";
-
-
-            }
-            Debug.Log(debugMsg);
-        }
-
-        // for debug only
-        public void ExportZoneBlocks3()
-        {
-            var nm = NetManager.instance;
-            //nm.
-            for (ushort i = 0; i < nm.m_segments.m_buffer.Length; i++)
-            {
-                var seg = nm.m_segments.m_buffer[i];
-                //var roadAI = seg.Info.GetComponent<RoadAI>();
-                //roadAI.Creat
-                
-                if (seg.m_startNode == 0 || seg.m_endNode == 0)
-                    continue;
-
-                var startDirection = seg.m_startDirection;
-                var endDirection = seg.m_endDirection;
-                if ((seg.m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None)
-                {                    
-                    startDirection = seg.m_endDirection;
-                    endDirection = seg.m_startDirection;
-                }
-                var startPos = nm.m_nodes.m_buffer[seg.m_startNode].m_position;
-                var endPos = nm.m_nodes.m_buffer[seg.m_endNode].m_position;
-
-                //var angle = Vector3.Angle(startDirection, -endDirection);
-                var anglePos = Vector3.Angle(startPos, endPos);
-                var angleRad = anglePos * Mathf.Deg2Rad;
-                var anglePosRev = Vector3.Angle(endPos, startPos);
-                var angleRadRev = anglePosRev * Mathf.Deg2Rad;
-                var angleDirs = Vector3.Angle(startDirection, endDirection);
-                //Vector3.Angle()
-
-                string debugMsg = "";
-                debugMsg += "startDirection: " + startDirection;
-                debugMsg += "\n";
-                debugMsg += "endDirection: " + endDirection;
-                debugMsg += "\n";
-                debugMsg += "startPos: " + startPos.ToString();
-                debugMsg += "\n";
-                debugMsg += "endPos: " + endPos.ToString();
-                debugMsg += "\n";
-                debugMsg += "anglePos: " + anglePos;
-                debugMsg += "\n";
-                debugMsg += "angleRad: " + angleRad;
-                debugMsg += "\n";
-                debugMsg += "anglePosRev: " + anglePosRev;
-                debugMsg += "\n";
-                debugMsg += "angleRadRev: " + angleRadRev;
-                debugMsg += "\n";
-                debugMsg += "angleDirs: " + angleDirs;
-                debugMsg += "\n";
-                debugMsg += "seg.m_cornerAngleEnd: " + seg.m_cornerAngleEnd;
-                debugMsg += "\n";
-                debugMsg += "seg.m_cornerAngleStart: " + seg.m_cornerAngleStart;
-                debugMsg += "\n";
-                Debug.Log(debugMsg);
-            }
-
-            var zm = ZoneManager.instance;
-            foreach (var zoneBlock in zm.m_blocks.m_buffer)
-            {
-                if (zoneBlock.m_position == Vector3.zero)
-                    continue;
-                //zoneBlock.SetZone();
-                //ItemClass.Zone.
-                string debugMsg = "";
-                debugMsg += "zoneBlock.m_position: " + zoneBlock.m_position.ToString();
-                debugMsg += "\n";
-                debugMsg += "zoneBlock.RowCount: " + zoneBlock.RowCount.ToString();
-                debugMsg += "\n";
-                debugMsg += "zoneBlock.Distance: " + zoneBlock.Distance.ToString();
-                debugMsg += "\n";
-                debugMsg += "zoneBlock.m_angle: " + zoneBlock.m_angle.ToString();
-                debugMsg += "\n";
-                debugMsg += "zoneBlock.m_zone1: " + zoneBlock.m_zone1.ToString();
-                debugMsg += "\n";
-                debugMsg += "zoneBlock.m_zone2: " + zoneBlock.m_zone2.ToString();
-                debugMsg += "\n";
-                debugMsg += "zoneBlock.GetType(): " + zoneBlock.GetType().ToString();
-                debugMsg += "\n";
-                
-
-                Debug.Log(debugMsg);
-            }
-        }
-
-        // attempt to export whole roads (multisegment) but it doesn't work properly - not used
-        public void ExportRoads()
-        {
-            Debug.Log("EXPORT ROADS");
-
-            ExceptionPanel panel = UIView.library.ShowModal<ExceptionPanel>("ExceptionPanel");
-            string msg = "";
-
-            string confFilePath = Path.GetFullPath("Files/import_export.conf");
-
-            if (!File.Exists(confFilePath))
-            {
-                panel.SetMessage("Jan's mod", "no conf file provided!", false);
-                return;
-            }
-
-            Dictionary<string, string> conf = new Dictionary<string, string>();
-            using (StreamReader confSr = File.OpenText(confFilePath)) {
-                while (!confSr.EndOfStream) {
-                    string[] keyVal = confSr.ReadLine().Split(':');
-                    if (keyVal.Length == 2)
-                        conf.Add(keyVal[0], keyVal[1]);
-                }
-            }
-
-            double centerLat = double.Parse(conf["CenterLatitude"]);
-            double centerLon = double.Parse(conf["CenterLongitude"]);
-
-            WGS84_UTM convertor = new WGS84_UTM(null);
-            UTMResult centerUTM = convertor.convertLatLngToUtm(centerLat, centerLon);
-            string ZoneLetter = "S";
-            if (centerLat > 0)
-                ZoneLetter = "N";
-
-            string columns = "Id,Name,Geometry";
-
-            var a_type = typeof(NetSegment);
-            var properties = a_type.GetProperties();
-            foreach (var prop in properties)
-            {
-                columns = columns + string.Format(",{0}", prop.Name);
-            }
-
-            List<string> txtLines = new List<string>
-                {
-                    columns
-                };
-
-            NetManager net_manager = NetManager.instance;
-            NetSegment[] segments = net_manager.m_segments.m_buffer;
-            Dictionary<string, List<NetSegment>> roadsCs = new Dictionary<string, List<NetSegment>>();
-            for (int i = 0; i < segments.Length; i++)
-            {
-                var a_seg = segments[i];
-                if (a_seg.Info.ToString().Contains("Highway"))
-                    continue;
-                var road_name = net_manager.GetSegmentName((ushort)i);
-                if (road_name == null || road_name == "")
-                    continue; //road_name = "no name " + i.ToString();
-                if (!roadsCs.ContainsKey(road_name))
-                {
-                    roadsCs.Add(road_name, new List<NetSegment>());
-                }
-                roadsCs[road_name].Add(a_seg);
-            }
-
-            int cnt = 0;
-            foreach (KeyValuePair<string, List<NetSegment>> road in roadsCs)
-            {
-                cnt++;
-                var road_name = road.Key;
-                //string debug_msg = "";
-                //debug_msg += "road_name: " + road_name + " | ";
-                bool set_field_info = false;
-                string field_info = "";
-                //Dictionary<ushort, ushort> start_end_nodes = new Dictionary<ushort, ushort>();
-                Dictionary<string, HashSet<string>> segments_order = new Dictionary<string, HashSet<string>>();
-                List<string> road_ends = new List<string>();
-                foreach (var a_seg in road.Value)
-                {
-                    if (!set_field_info)
-                    {
-                        foreach (var prop in properties)
-                        {
-                            var prop_val = prop.GetValue(a_seg, null);
-                            if (prop_val.ToString().Contains(","))
-                                prop_val = "\"" + prop_val.ToString() + "\"";
-                            field_info += string.Format(",{0}", prop_val);
-                        }
-                        set_field_info = true;
-                    }
-
-                    //debug_msg += "a_seg.m_buildIndex: " + a_seg.m_buildIndex.ToString() + " | ";
-                    //debug_msg += "a_seg.m_startNode: " + a_seg.m_startNode.ToString() + ", a_seg.m_endNode: " + a_seg.m_endNode.ToString() + "; ";
-                    //debug_msg += "\n";
-
-                    var startPos = net_manager.m_nodes.m_buffer[a_seg.m_startNode].m_position;
-                    var startRwoX = startPos.x + centerUTM.Easting;
-                    var startRwoY = startPos.z + centerUTM.Northing;
-                    LatLng startRwoLL = convertor.convertUtmToLatLng(startRwoX, startRwoY, centerUTM.ZoneNumber, ZoneLetter);
-
-                    var endPos = net_manager.m_nodes.m_buffer[a_seg.m_endNode].m_position;
-                    var endRwoX = endPos.x + centerUTM.Easting;
-                    var endRwoY = endPos.z + centerUTM.Northing;
-                    LatLng endRwoLL = convertor.convertUtmToLatLng(startRwoX, startRwoY, centerUTM.ZoneNumber, ZoneLetter);
-
-                    string startLLid = string.Format("{0} {1}", startRwoLL.Lat, startRwoLL.Lng);
-                    string endLLid = string.Format("{0} {1}", endRwoLL.Lat, endRwoLL.Lng);
-
-                    if (!segments_order.ContainsKey(startLLid))
-                    {
-                        segments_order[startLLid] = new HashSet<string>();
-                        segments_order[startLLid].Add(startLLid);
-                        segments_order[startLLid].Add(endLLid);
-                        road_ends.Add(startLLid);
-                    }
-                    else
-                    {
-                        segments_order[startLLid].Add(startLLid);
-                        segments_order[startLLid].Add(endLLid);
-                        road_ends.Remove(startLLid);
-                    }
-
-                    if (!segments_order.ContainsKey(endLLid))
-                    {
-                        segments_order[endLLid] = new HashSet<string>();
-                        segments_order[endLLid].Add(startLLid);
-                        segments_order[endLLid].Add(endLLid);
-                        road_ends.Add(endLLid);
-                    }
-                    else
-                    {
-                        segments_order[endLLid].Add(startLLid);
-                        segments_order[endLLid].Add(endLLid);
-                        road_ends.Remove(endLLid);
-                    }
-
-                    //if (start_end_nodes.Keys.Contains(a_seg.m_startNode) || start_end_nodes.Values.Contains(a_seg.m_endNode))
-                    //    start_end_nodes[a_seg.m_endNode] = a_seg.m_startNode;
-                    //else
-                    //    start_end_nodes[a_seg.m_startNode] = a_seg.m_endNode;
-                }
-
-                string tmp_msg = "road ends(" + road_ends.Count.ToString() + "): ";
-                foreach (var road_end in road_ends)
-                    tmp_msg += road_end + " | ";
-                tmp_msg += "segments_order (" + segments_order.Count.ToString() + "): ";
-                foreach (KeyValuePair<string, HashSet<string>> seg_o in segments_order)
-                {
-                    tmp_msg += seg_o.Key + ": ";
-                    foreach (var llid in seg_o.Value)
-                        tmp_msg += llid + " | ";
-                    tmp_msg += "\n";
-                }
-
-
-                panel.SetMessage("GeoSkylines", tmp_msg, false);
-                return;
-
-
-
-                //IEnumerable<ushort> keys_not_values = start_end_nodes.Keys.AsQueryable().Except(start_end_nodes.Values);
-                //debug_msg += "Keys not in values: ";
-                //foreach (var key in keys_not_values)
-                //    Debug.Log(key);
-                //foreach (var key in start_end_nodes.Keys)
-                //{
-                //    if (!start_end_nodes.Values.Contains(key))
-                //        debug_msg += key.ToString();
-                //}
-                //debug_msg += "\n";
-                //debug_msg += "Values not in Keys: ";
-                //IEnumerable<ushort> values_not_keys = start_end_nodes.Values.AsQueryable().Except(start_end_nodes.Keys);
-                //foreach (var val in values_not_keys)
-                //    Debug.Log(val);   
-                //foreach (var val in start_end_nodes.Values)
-                //{
-                //    if (!start_end_nodes.Keys.Contains(val))
-                //        debug_msg += val.ToString();
-                //}
-                //debug_msg += "\n";
-                //ushort nodeId = res.First();
-
-
-
-                //    ushort nodeId = start_end_nodes.Keys.First();
-                //    foreach (var key in start_end_nodes.Keys)
-                //    {
-                //        if (!start_end_nodes.Values.Contains(key))
-                //        {
-                //            nodeId = key;
-                //            break;
-                //        }
-                //    }
-                //    List<LatLng> listOfPositions = new List<LatLng>();
-                //    bool end = false;
-                //    while (!end)
-                //    {
-                //        //Debug.Log("Is it going here?");
-                //        var pos = net_manager.m_nodes.m_buffer[nodeId].m_position;
-                //        var rwoX = pos.x + centerUTM.Easting;
-                //        var rwoY = pos.z + centerUTM.Northing;
-                //        LatLng rwoLL = convertor.convertUtmToLatLng(rwoX, rwoY, centerUTM.ZoneNumber, ZoneLetter);
-                //        listOfPositions.Add(rwoLL);
-
-                //        if (start_end_nodes.ContainsKey(nodeId))
-                //            nodeId = start_end_nodes[nodeId];
-                //        else
-                //            end = true;
-                //    }
-                //    //Debug.Log("listOfPositions.Count: " + listOfPositions.Count.ToString());
-                //    var roadLineWkt = createWkt(listOfPositions.ToArray());
-
-                //    string rowTxt = string.Format("{0},{1},{2},{3}", cnt, road_name, roadLineWkt, field_info);
-                //    txtLines.Add(rowTxt);
-                //    //Debug.Log(debug_msg);
-                //}
-
-                //StreamWriter outputFile = new StreamWriter("Files/roads_cs.csv", false, new UTF8Encoding(true));
-                //foreach (var lineTxt in txtLines)
-                //{
-                //    outputFile.WriteLine(lineTxt);
-                //}
-                //outputFile.Close();
-
-                //panel.SetMessage("Jan's mod", msg, false);
-            }
-        }
-
-        static public void DisplayLLOnMouseClick()
-        {
-            string impExPath = Path.GetFullPath("Files/import_export.conf");
-
-            ExceptionPanel panel = UIView.library.ShowModal<ExceptionPanel>("ExceptionPanel");
-            if (!File.Exists(impExPath))
-            {
-                panel.SetMessage("GeoSkylines", "no conf file provided!", false);
-                return;
-            }            
-            string msg = "";
-
-            Vector3 screenMousePos = Input.mousePosition;            
-            Ray mouseRay = Camera.main.ScreenPointToRay(screenMousePos);
-            var mousePos = GeoSkylinesTool.RaycastMouseLocation(mouseRay);            
-
-            Dictionary<string, string> conf = new Dictionary<string, string>();
-            using (StreamReader confSr = File.OpenText(impExPath)) {
-                while (!confSr.EndOfStream) {
-                    string[] keyVal = confSr.ReadLine().Split(':');
-                    if (keyVal.Length == 2)
-                        conf.Add(keyVal[0], keyVal[1]);
-                }
-            }
-
-            double centerLat = double.Parse(conf["CenterLatitude"]);
-            double centerLon = double.Parse(conf["CenterLongitude"]);
-
-            WGS84_UTM convertor = new WGS84_UTM(null);
-            UTMResult centerUTM = convertor.convertLatLngToUtm(centerLat, centerLon);
-            string ZoneLetter = "S";
-            if (centerLat > 0)
-                ZoneLetter = "N";
-
-            var rwoX = mousePos.x + centerUTM.Easting;
-            var rwoY = mousePos.y + centerUTM.Northing;
-            LatLng rwoLL = convertor.convertUtmToLatLng(rwoX, rwoY, centerUTM.ZoneNumber, ZoneLetter);
-
-            msg += "Screen coordinates (x, y): ";
-            msg += screenMousePos.ToString();
-            msg += "\n";
-            msg += "Game coordinates (x, z): ";
-            msg += mousePos.ToString();
-            msg += "\n";
-            msg += "World coordinates (lon, lat): ";
-            msg += rwoLL.Lng.ToString() + "," + rwoLL.Lat.ToString();
-            panel.SetMessage("Coordinates", msg, false);
+            ExecuteExport(new string[] { "zones" });
         }
 
         public void ExportTrees()
         {
-            if (!confloaded)
-                return;
-
-            string columns = "Id,Geometry";
-
-            var a_type = typeof(TreeInstance);
-            var properties = a_type.GetProperties();
-            foreach (var prop in properties)
-            {
-                columns = columns + string.Format(",{0}", prop.Name);
-            }
-
-            List<string> txtLines = new List<string>
-                {
-                    columns
-                };
-
-            TreeManager tree_manager = TreeManager.instance;
-            TreeInstance[] trees = tree_manager.m_trees.m_buffer;
-            int cnt = 0;
-            foreach (var a_tree in trees)
-            {
-                if (a_tree.Position.y == 0)
-                    continue;
-
-                if (!WithinExportCoords(a_tree.Position))
-                    continue;
-
-                cnt++;
-
-                LatLng rwoLL = GamePosition2LatLng(a_tree.Position);
-
-                LatLng[] listOfPostions = new LatLng[]
-                {
-                        rwoLL
-                };
-                var wkt = CreateWkt(listOfPostions);
-                string rowTxt = string.Format("{0},{1}", cnt, wkt);
-                foreach (var prop in properties)
-                {
-                    var prop_val = prop.GetValue(a_tree, null);
-                    if (prop_val.ToString().Contains(","))
-                        prop_val = "\"" + prop_val.ToString() + "\"";
-                    rowTxt = rowTxt + string.Format(",{0}", prop_val);
-                }
-
-                txtLines.Add(rowTxt);
-            }
-
-            string outputFilePath = Path.GetFullPath("Files/trees_cs.csv");
-            using (StreamWriter outputFile = new StreamWriter(outputFilePath, false, new UTF8Encoding(true))) {
-                foreach (var lineTxt in txtLines) {
-                    outputFile.WriteLine(lineTxt);
-                }
-            }
-
-            panel.SetMessage("GeoSkylines", "Trees export completed. ", false);
+            ExecuteExport(new string[] { "trees" });
         }
 
-        public void RemoveAllOfSomething(string something)
+        public void BatchExportConfiguredLayers()
         {
-            if (something == "train")
-            {
-
-            }
-
-            NetSegment[] segments = net_manager.m_segments.m_buffer;
-            for (int i = 0; i < segments.Length; i++)
-            {
-                var a_seg = segments[i];
-
-                if (a_seg.m_startNode == 0 || a_seg.m_endNode == 0)
-                    continue;
-
-                string infoTxt = a_seg.Info.ToString();
-
-                if (infoTxt.Contains("Train Line") || infoTxt.Contains("Train Track"))
-                {                    
-                    net_manager.ReleaseSegment((ushort)i, false);
-                }                  
-            }
-        }
-
-        public bool WithinExportCoords(Vector3 position)
-        {
-            if (position.x > exportXMin && position.x < exportXMax && position.z > exportYMin && position.z < exportYMax)
-                return true;
-            else
-                return false;
-        }
-
-        public LatLng GamePosition2LatLng(Vector3 position)
-        {
-            var rwoX = position.x + centerUTM.Easting;
-            var rwoY = position.z + centerUTM.Northing;
-            LatLng rwoLL = convertor.convertUtmToLatLng(rwoX, rwoY, centerUTM.ZoneNumber, ZoneLetter);
-            return rwoLL;
-        }
-
-        static private string CreateWkt(LatLng[] listOfPositions)
-        {
-            //POINT(14.362884416061357 50.965573500452379)
-            //LINESTRING (-93.370254516601562 37.888759613037109, -93.371223449707031 37.888286590576172, -93.371490478515625 37.888153076171875)
-            //LINEARRING (14.361453056335449 50.966289520263672, 14.361678123474121 50.966449737548828, 14.361824989318848 50.96636962890625, 14.361600875854492 50.966209411621094, 14.361453056335449 50.966289520263672)
-            string wkt = "";
-            //Debug.Log("listOfPositions.Length: " + listOfPositions.Length.ToString());
-            if (listOfPositions.Length == 1)
-                wkt = string.Format("\"POINT ({0} {1})\"", listOfPositions[0].Lng, listOfPositions[0].Lat);
-            else if (listOfPositions.Length > 1)
-            {
-                string coords = "";
-                string sep = "";
-                foreach (var pos in listOfPositions)
-                {
-                    coords += string.Format("{0}{1} {2}", sep, pos.Lng, pos.Lat);
-                    sep = ", ";
-                }
-
-                var lastIndex = listOfPositions.Length - 1;
-                if (listOfPositions[0].Lat == listOfPositions[lastIndex].Lat && listOfPositions[0].Lng == listOfPositions[lastIndex].Lng)
-                    wkt = string.Format("\"POLYGON (({0}))\"", coords);
-                else
-                    wkt = string.Format("\"LINESTRING ({0})\"", coords);
-            }
-
-            return wkt;
-        }
-
-        public void OutputPrefabInfo()
-        {
-            string msg = "";
-            
-            NetSegment[] segments = net_manager.m_segments.m_buffer;
-            int segCnt = 0;
-            List<ushort> nodes = new List<ushort>();
-            for (int i = 0; i < segments.Length; i++)
-            {
-                msg = "";
-                var a_seg = segments[i];
-
-                if (a_seg.m_startNode == 0 || a_seg.m_endNode == 0)
-                    continue;
-                segCnt++;
-
-                if (!nodes.Contains(a_seg.m_startNode))
-                    nodes.Add(a_seg.m_startNode);
-                if (!nodes.Contains(a_seg.m_endNode))
-                    nodes.Add(a_seg.m_endNode);
-
-            }
-
-            NetNode[] nodes2 = net_manager.m_nodes.m_buffer;
-            int nodeCnt = 0;
-            for (int i = 0; i < nodes2.Length; i++)
-            {
-                msg = "";
-                var a_node = nodes2[i];
-
-                if ((net_manager.m_nodes.m_buffer[i].m_flags & NetNode.Flags.Created) != NetNode.Flags.None)
-                {
-                    nodeCnt++;                    
-                }                
-            }
-
-            msg += "Node Count: \n";
-            msg += "m_nodeCount: " + net_manager.m_nodeCount + "; From Segs: " + nodes.Count + "; From iter: " + nodeCnt + "\n";
-            msg += "Segment Count: \n"; 
-            msg += "m_segmentCount: " + net_manager.m_segmentCount + "; From iter: " + segCnt + "\n";
-            msg += "\n";
-
-            msg += "TreeInfo: ";
-            msg += "\n";
-            msg += "index, Prefab name, Title, Prefab category";
-            msg += "\n";
-            var prefabCnt = PrefabCollection<TreeInfo>.LoadedCount();
-            for (int i = 0; i < prefabCnt; i++)
-            {
-                var prefab = PrefabCollection<TreeInfo>.GetPrefab((uint)i);
-                msg += string.Format("{0}, {1}, {2}, {3}", i, prefab.name, prefab.GetGeneratedTitle(), prefab.category);
-                msg += "\n";
-            }
-
-            msg += "NetInfo: ";
-            msg += "\n";
-            msg += "index, Prefab name, Title, Prefab category";
-            msg += "\n";
-            prefabCnt = PrefabCollection<NetInfo>.LoadedCount();
-            for (int i = 0; i < prefabCnt; i++)
-            {
-                var prefab = PrefabCollection<NetInfo>.GetPrefab((uint)i);
-                msg += string.Format("{0}, {1}, {2}, {3}", i, prefab.name, prefab.GetGeneratedTitle(), prefab.category);
-                msg += "\n";
-            }
-
-            msg += "BuildingInfo: ";
-            msg += "\n";
-            msg += "index, Prefab name, Title, Prefab category";
-            msg += "\n";
-            prefabCnt = PrefabCollection<BuildingInfo>.LoadedCount();
-            for (int i = 0; i < prefabCnt; i++)
-            {
-                var prefab = PrefabCollection<BuildingInfo>.GetPrefab((uint)i);
-                msg += string.Format("{0}, {1}, {2}, {3}", i, prefab.name, prefab.GetGeneratedTitle(), prefab.category);
-                msg += "\n";
-            }
-
-            Debug.Log(msg);
-
-            panel.SetMessage("GeoSkylines", "Prefab information written into a output_log.txt in folder c:/Program Files (x86)/Steam/steamapps/common/Cities_Skylines/Cities_Data (or similar) ", false);
-
+            ExecuteExport(config.GetExportLayers());
         }
 
         public string OutputConfiguration()
         {
-            string confTxt = "";
+            string outputDir = config.GetOutputDirectory();
+            string formats = string.Join(", ", config.GetExportFormats());
+            string layers = string.Join(", ", config.GetExportLayers());
 
-            confTxt += "MapName: " + mapName;
-            confTxt += "(" + centerLon + ", " + centerLat + ")\n";
-            confTxt += "exportXMin: " + exportXMin + "\n";
-            confTxt += "exportXMax: " + exportXMax + "\n";
-            confTxt += "exportYMin: " + exportYMin + "\n";
-            confTxt += "exportYMax: " + exportYMax + "\n";
-
+            string confTxt = string.Empty;
+            confTxt += "MapName: " + mapName + " (" + centerLon.ToString(CultureInfo.InvariantCulture) + ", " + centerLat.ToString(CultureInfo.InvariantCulture) + ")\n";
+            confTxt += "exportXMin: " + exportXMin.ToString(CultureInfo.InvariantCulture) + "\n";
+            confTxt += "exportXMax: " + exportXMax.ToString(CultureInfo.InvariantCulture) + "\n";
+            confTxt += "exportYMin: " + exportYMin.ToString(CultureInfo.InvariantCulture) + "\n";
+            confTxt += "exportYMax: " + exportYMax.ToString(CultureInfo.InvariantCulture) + "\n";
+            confTxt += "outputDir: " + outputDir + "\n";
+            confTxt += "formats: " + formats + "\n";
+            confTxt += "layers: " + layers + "\n";
+            confTxt += "runCli: " + config.GetBool(GeoSkylinesConfig.ExportRunCliKey, false).ToString() + "\n";
             return confTxt;
+        }
+
+        public static void DisplayLLOnMouseClick()
+        {
+            GeoSkylinesConfig config = GeoSkylinesConfig.Load();
+            string configPath = config.ConfigPath;
+
+            ExceptionPanel panel = UIView.library.ShowModal<ExceptionPanel>("ExceptionPanel");
+            if (!File.Exists(configPath))
+            {
+                panel.SetMessage("GeoSkylines", "No configuration file provided!", false);
+                return;
+            }
+
+            Vector3 screenMousePos = Input.mousePosition;
+            Ray mouseRay = Camera.main.ScreenPointToRay(screenMousePos);
+            Vector3 mousePos = GeoSkylinesTool.RaycastMouseLocation(mouseRay);
+
+            double centerLat = config.GetDouble("CenterLatitude", 0d);
+            double centerLon = config.GetDouble("CenterLongitude", 0d);
+            WGS84_UTM convertor = new WGS84_UTM(null);
+            UTMResult centerUTM = convertor.convertLatLngToUtm(centerLat, centerLon);
+            string zoneLetter = centerLat >= 0 ? "N" : "S";
+
+            double rwoX = mousePos.x + centerUTM.Easting;
+            double rwoY = mousePos.z + centerUTM.Northing;
+            LatLng rwoLL = convertor.convertUtmToLatLng(rwoX, rwoY, centerUTM.ZoneNumber, zoneLetter);
+
+            string msg = string.Empty;
+            msg += "Screen coordinates (x, y): " + screenMousePos + "\n";
+            msg += "Game coordinates (x, z): " + mousePos + "\n";
+            msg += "World coordinates (lon, lat): " + rwoLL.Lng.ToString(CultureInfo.InvariantCulture) + "," + rwoLL.Lat.ToString(CultureInfo.InvariantCulture);
+            panel.SetMessage("Coordinates", msg, false);
+        }
+
+        public void OutputPrefabInfo()
+        {
+            string msg = string.Empty;
+
+            msg += "TreeInfo:\nindex, Prefab name, Title, Prefab category\n";
+            int prefabCnt = PrefabCollection<TreeInfo>.LoadedCount();
+            for (int i = 0; i < prefabCnt; i++)
+            {
+                TreeInfo prefab = PrefabCollection<TreeInfo>.GetPrefab((uint)i);
+                msg += string.Format("{0}, {1}, {2}, {3}\n", i, prefab.name, prefab.GetGeneratedTitle(), prefab.category);
+            }
+
+            msg += "\nNetInfo:\nindex, Prefab name, Title, Prefab category\n";
+            prefabCnt = PrefabCollection<NetInfo>.LoadedCount();
+            for (int i = 0; i < prefabCnt; i++)
+            {
+                NetInfo prefab = PrefabCollection<NetInfo>.GetPrefab((uint)i);
+                msg += string.Format("{0}, {1}, {2}, {3}\n", i, prefab.name, prefab.GetGeneratedTitle(), prefab.category);
+            }
+
+            msg += "\nBuildingInfo:\nindex, Prefab name, Title, Prefab category\n";
+            prefabCnt = PrefabCollection<BuildingInfo>.LoadedCount();
+            for (int i = 0; i < prefabCnt; i++)
+            {
+                BuildingInfo prefab = PrefabCollection<BuildingInfo>.GetPrefab((uint)i);
+                msg += string.Format("{0}, {1}, {2}, {3}\n", i, prefab.name, prefab.GetGeneratedTitle(), prefab.category);
+            }
+
+            UnityEngine.Debug.Log(msg);
+            panel.SetMessage("GeoSkylines", "Prefab information written into output_log.txt.", false);
+        }
+
+        public void RemoveAllOfSomething(string something)
+        {
+            if (!string.Equals(something, "train", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            NetSegment[] segments = netManager.m_segments.m_buffer;
+            for (int i = 0; i < segments.Length; i++)
+            {
+                NetSegment segment = segments[i];
+                if (segment.m_startNode == 0 || segment.m_endNode == 0 || segment.Info == null)
+                {
+                    continue;
+                }
+
+                string infoTxt = segment.Info.ToString();
+                if (infoTxt.Contains("Train Line") || infoTxt.Contains("Train Track"))
+                {
+                    netManager.ReleaseSegment((ushort)i, false);
+                }
+            }
+        }
+
+        private void ExecuteExport(IEnumerable<string> requestedLayers)
+        {
+            if (!confloaded)
+            {
+                return;
+            }
+
+            string[] layersToExport = requestedLayers
+                .Select(delegate(string layer) { return (layer ?? string.Empty).Trim().ToLowerInvariant(); })
+                .Where(delegate(string layer) { return !string.IsNullOrEmpty(layer); })
+                .Distinct()
+                .ToArray();
+
+            string outputDirectory = config.GetOutputDirectory();
+            Directory.CreateDirectory(outputDirectory);
+
+            GeoSkylinesManifest manifest = new GeoSkylinesManifest();
+            manifest.MapName = mapName;
+            manifest.OutputDirectory = outputDirectory;
+            manifest.ConfigPath = config.ConfigPath;
+            manifest.Formats.AddRange(config.GetExportFormats());
+
+            foreach (string layerName in layersToExport)
+            {
+                GeoSkylinesLayer layer = BuildLayer(layerName);
+                manifest.Layers.Add(layer);
+
+                string baseName = BuildBaseFileName(layer.Name);
+                foreach (string format in config.GetExportFormats())
+                {
+                    if (format == "csv")
+                    {
+                        string csvPath = Path.Combine(outputDirectory, baseName + ".csv");
+                        GeoSkylinesCsvWriter.Write(csvPath, layer);
+                        layer.Files.Add(csvPath);
+                        WriteLegacyCsvAliasIfNeeded(layer, csvPath);
+                    }
+                    else if (format == "geojson")
+                    {
+                        string geoJsonPath = Path.Combine(outputDirectory, baseName + ".geojson");
+                        GeoSkylinesGeoJsonWriter.Write(geoJsonPath, layer);
+                        layer.Files.Add(geoJsonPath);
+                    }
+                }
+            }
+
+            RunCliIfConfigured(manifest);
+            string manifestPath = Path.Combine(outputDirectory, BuildBaseFileName("export_manifest") + ".json");
+            GeoSkylinesManifestWriter.Write(manifestPath, manifest);
+            int totalFeatures = manifest.Layers.Sum(delegate(GeoSkylinesLayer layer) { return layer.Features.Count; });
+            panel.SetMessage("GeoSkylines", "Export completed. Layers: " + manifest.Layers.Count + ", features: " + totalFeatures + ". Output: " + outputDirectory, false);
+        }
+
+        private GeoSkylinesLayer BuildLayer(string layerName)
+        {
+            switch (layerName)
+            {
+                case "roads":
+                    return BuildRoadLikeLayer("roads", false, false);
+                case "rails":
+                    return BuildRoadLikeLayer("rails", true, false);
+                case "pedestrian_streets":
+                    return BuildRoadLikeLayer("pedestrian_streets", false, true);
+                case "buildings":
+                    return BuildBuildingsLayer();
+                case "zones":
+                    return BuildZonesLayer();
+                case "trees":
+                    return BuildTreesLayer();
+                case "transit_facilities":
+                    return BuildFilteredBuildingsLayer("transit_facilities", IsTransitFacility);
+                case "transit_hubs":
+                    return BuildFilteredBuildingsLayer("transit_hubs", IsTransitHub);
+                case "pedestrian_service_points":
+                    return BuildFilteredBuildingsLayer("pedestrian_service_points", IsPedestrianServicePoint);
+                case "outside_connections":
+                    return BuildOutsideConnectionsLayer();
+                case "transit_lines":
+                    return BuildTransitLinesLayer();
+                case "transit_stops":
+                    return BuildTransitStopsLayer();
+                case "pedestrian_areas":
+                    return BuildPedestrianAreasLayer();
+                default:
+                    GeoSkylinesLayer emptyLayer = new GeoSkylinesLayer(layerName);
+                    emptyLayer.Warnings.Add("Unknown layer: " + layerName);
+                    return emptyLayer;
+            }
+        }
+
+        private GeoSkylinesLayer BuildRoadLikeLayer(string layerName, bool railsOnly, bool pedestrianOnly)
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer(layerName);
+            NetSegment[] segments = netManager.m_segments.m_buffer;
+            for (int i = 0; i < segments.Length; i++)
+            {
+                NetSegment segment = segments[i];
+                if (segment.m_startNode == 0 || segment.m_endNode == 0 || segment.Info == null)
+                {
+                    continue;
+                }
+
+                string infoText = SafeLower(segment.Info.ToString());
+                if (infoText.Contains("water pipe"))
+                {
+                    continue;
+                }
+
+                bool isRail = infoText.Contains("train line") || infoText.Contains("train track");
+                bool isPedestrian = infoText.Contains("pedestrian") || infoText.Contains("promenade");
+
+                if (railsOnly != isRail)
+                {
+                    continue;
+                }
+
+                if (pedestrianOnly && !isPedestrian)
+                {
+                    continue;
+                }
+
+                if (!railsOnly && !pedestrianOnly && isRail)
+                {
+                    continue;
+                }
+
+                if (!WithinExportCoords(segment.m_middlePosition))
+                {
+                    continue;
+                }
+
+                GeoSkylinesGeometry geometry = BuildSegmentGeometry(segment);
+                string featureId = i.ToString(CultureInfo.InvariantCulture);
+                GeoSkylinesFeature feature = new GeoSkylinesFeature(layerName, featureId, geometry);
+                feature.Attributes.Add("id", featureId);
+                feature.Attributes.Add("name", GetSegmentName((ushort)i, segment));
+                feature.Attributes.Add("prefab", SafeString(segment.Info.name));
+                feature.Attributes.Add("service", segment.Info.m_class.m_service.ToString());
+                feature.Attributes.Add("sub_service", segment.Info.m_class.m_subService.ToString());
+                feature.Attributes.Add("elevation_start", GetElevationAtNode(segment.m_startNode).ToString("R", CultureInfo.InvariantCulture));
+                feature.Attributes.Add("elevation_end", GetElevationAtNode(segment.m_endNode).ToString("R", CultureInfo.InvariantCulture));
+                feature.Attributes.Add("transport_hint", ClassifyTransportMode(infoText));
+                feature.Attributes.Add("pedestrian_hint", isPedestrian.ToString().ToLowerInvariant());
+
+                if (includeExtendedAttributes)
+                {
+                    AddMemberAttributes(feature.Attributes, segment, "segment");
+                }
+
+                layer.Features.Add(feature);
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildBuildingsLayer()
+        {
+            return BuildFilteredBuildingsLayer("buildings", delegate(Building building) { return true; });
+        }
+
+        private GeoSkylinesLayer BuildFilteredBuildingsLayer(string layerName, Func<Building, bool> predicate)
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer(layerName);
+            Building[] buildings = buildingManager.m_buildings.m_buffer;
+            for (int i = 0; i < buildings.Length; i++)
+            {
+                Building building = buildings[i];
+                if (building.m_position.y == 0 || building.Info == null)
+                {
+                    continue;
+                }
+
+                if (!WithinExportCoords(building.m_position))
+                {
+                    continue;
+                }
+
+                if (!predicate(building))
+                {
+                    continue;
+                }
+
+                GeoSkylinesGeometry geometry = BuildBuildingGeometry(building);
+                string featureId = i.ToString(CultureInfo.InvariantCulture);
+                GeoSkylinesFeature feature = new GeoSkylinesFeature(layerName, featureId, geometry);
+                LatLng centroid = GamePosition2LatLng(building.m_position);
+                feature.Attributes.Add("id", featureId);
+                feature.Attributes.Add("name", GetBuildingName((ushort)i, building));
+                feature.Attributes.Add("prefab", SafeString(building.Info.name));
+                feature.Attributes.Add("service", building.Info.m_class.m_service.ToString());
+                feature.Attributes.Add("sub_service", building.Info.m_class.m_subService.ToString());
+                feature.Attributes.Add("class_level", building.Info.m_class.m_level.ToString());
+                feature.Attributes.Add("width", building.Width.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("length", building.Length.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("angle", building.m_angle.ToString("R", CultureInfo.InvariantCulture));
+                feature.Attributes.Add("centroid_lon", centroid.Lng.ToString("R", CultureInfo.InvariantCulture));
+                feature.Attributes.Add("centroid_lat", centroid.Lat.ToString("R", CultureInfo.InvariantCulture));
+                feature.Attributes.Add("transport_hint", ClassifyBuildingTransportHint(building));
+
+                if (includeExtendedAttributes)
+                {
+                    AddMemberAttributes(feature.Attributes, building, "building");
+                }
+
+                layer.Features.Add(feature);
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildZonesLayer()
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer("zones");
+            ZoneManager zoneManager = ZoneManager.instance;
+            for (int i = 0; i < zoneManager.m_blocks.m_buffer.Length; i++)
+            {
+                ZoneBlock zoneBlock = zoneManager.m_blocks.m_buffer[i];
+                Vector3 position = zoneBlock.m_position;
+                if (position == Vector3.zero || !WithinExportCoords(position))
+                {
+                    continue;
+                }
+
+                ItemClass.Zone dominantZone = ItemClass.Zone.Unzoned;
+                int dominantCount = 0;
+                Dictionary<ItemClass.Zone, int> counts = new Dictionary<ItemClass.Zone, int>();
+                for (int row = 0; row < zoneBlock.RowCount; row++)
+                {
+                    for (int col = 0; col < 4; col++)
+                    {
+                        ItemClass.Zone zone = zoneBlock.GetZone(col, row);
+                        if (!counts.ContainsKey(zone))
+                        {
+                            counts.Add(zone, 0);
+                        }
+
+                        counts[zone] += 1;
+                        if (counts[zone] > dominantCount)
+                        {
+                            dominantCount = counts[zone];
+                            dominantZone = zone;
+                        }
+                    }
+                }
+
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("zones", i.ToString(CultureInfo.InvariantCulture), BuildZoneGeometry(zoneBlock));
+                feature.Attributes.Add("id", i.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("zone", dominantZone.ToString());
+                feature.Attributes.Add("row_count", zoneBlock.RowCount.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("dominant_cells", dominantCount.ToString(CultureInfo.InvariantCulture));
+                layer.Features.Add(feature);
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildTreesLayer()
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer("trees");
+            TreeManager treeManager = TreeManager.instance;
+            TreeInstance[] trees = treeManager.m_trees.m_buffer;
+            int exportId = 0;
+            for (int i = 0; i < trees.Length; i++)
+            {
+                TreeInstance tree = trees[i];
+                if (tree.Position.y == 0 || !WithinExportCoords(tree.Position))
+                {
+                    continue;
+                }
+
+                exportId += 1;
+                LatLng treePoint = GamePosition2LatLng(tree.Position);
+                GeoSkylinesGeometry geometry = CreatePointGeometry(treePoint);
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("trees", exportId.ToString(CultureInfo.InvariantCulture), geometry);
+                feature.Attributes.Add("id", exportId.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("tree_index", i.ToString(CultureInfo.InvariantCulture));
+
+                if (includeExtendedAttributes)
+                {
+                    AddMemberAttributes(feature.Attributes, tree, "tree");
+                }
+
+                layer.Features.Add(feature);
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildOutsideConnectionsLayer()
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer("outside_connections");
+            NetNode[] nodes = netManager.m_nodes.m_buffer;
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                NetNode node = nodes[i];
+                if ((node.m_flags & NetNode.Flags.Created) == NetNode.Flags.None)
+                {
+                    continue;
+                }
+
+                if ((node.m_flags & NetNode.Flags.Outside) == NetNode.Flags.None)
+                {
+                    continue;
+                }
+
+                if (!WithinExportCoords(node.m_position))
+                {
+                    continue;
+                }
+
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("outside_connections", i.ToString(CultureInfo.InvariantCulture), CreatePointGeometry(GamePosition2LatLng(node.m_position)));
+                feature.Attributes.Add("id", i.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("flags", node.m_flags.ToString());
+                layer.Features.Add(feature);
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildTransitLinesLayer()
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer("transit_lines");
+            EnsureTransportCache();
+
+            foreach (string warning in transportWarnings)
+            {
+                layer.Warnings.Add(warning);
+            }
+
+            foreach (TransportLineSnapshot snapshot in transportLines.Values.OrderBy(delegate(TransportLineSnapshot item) { return item.LineId; }))
+            {
+                List<GeoSkylinesCoordinate> coordinates = new List<GeoSkylinesCoordinate>();
+                foreach (ushort stopId in snapshot.Stops)
+                {
+                    Vector3 stopPosition = netManager.m_nodes.m_buffer[stopId].m_position;
+                    if (!WithinExportCoords(stopPosition))
+                    {
+                        continue;
+                    }
+
+                    LatLng point = GamePosition2LatLng(stopPosition);
+                    coordinates.Add(new GeoSkylinesCoordinate(point.Lng, point.Lat));
+                }
+
+                if (coordinates.Count < 2)
+                {
+                    continue;
+                }
+
+                GeoSkylinesGeometry geometry = new GeoSkylinesGeometry("LineString");
+                geometry.Parts.Add(coordinates);
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("transit_lines", snapshot.LineId.ToString(CultureInfo.InvariantCulture), geometry);
+                feature.Attributes.Add("id", snapshot.LineId.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("name", snapshot.Name);
+                feature.Attributes.Add("transport_type", snapshot.TransportType);
+                feature.Attributes.Add("stop_count", snapshot.Stops.Count.ToString(CultureInfo.InvariantCulture));
+                layer.Features.Add(feature);
+            }
+
+            if (layer.Features.Count == 0 && layer.Warnings.Count == 0)
+            {
+                layer.Warnings.Add("No transport lines were detected in the loaded save.");
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildTransitStopsLayer()
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer("transit_stops");
+            EnsureTransportCache();
+
+            foreach (string warning in transportWarnings)
+            {
+                layer.Warnings.Add(warning);
+            }
+
+            foreach (TransportLineSnapshot snapshot in transportLines.Values.OrderBy(delegate(TransportLineSnapshot item) { return item.LineId; }))
+            {
+                for (int index = 0; index < snapshot.Stops.Count; index++)
+                {
+                    ushort stopId = snapshot.Stops[index];
+                    Vector3 stopPosition = netManager.m_nodes.m_buffer[stopId].m_position;
+                    if (!WithinExportCoords(stopPosition))
+                    {
+                        continue;
+                    }
+
+                    GeoSkylinesFeature feature = new GeoSkylinesFeature(
+                        "transit_stops",
+                        snapshot.LineId.ToString(CultureInfo.InvariantCulture) + "_" + stopId.ToString(CultureInfo.InvariantCulture) + "_" + index.ToString(CultureInfo.InvariantCulture),
+                        CreatePointGeometry(GamePosition2LatLng(stopPosition)));
+                    feature.Attributes.Add("line_id", snapshot.LineId.ToString(CultureInfo.InvariantCulture));
+                    feature.Attributes.Add("line_name", snapshot.Name);
+                    feature.Attributes.Add("stop_id", stopId.ToString(CultureInfo.InvariantCulture));
+                    feature.Attributes.Add("stop_index", index.ToString(CultureInfo.InvariantCulture));
+                    feature.Attributes.Add("transport_type", snapshot.TransportType);
+                    layer.Features.Add(feature);
+                }
+            }
+
+            if (layer.Features.Count == 0 && layer.Warnings.Count == 0)
+            {
+                layer.Warnings.Add("No transit stops were detected in the loaded save.");
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildPedestrianAreasLayer()
+        {
+            GeoSkylinesLayer layer = new GeoSkylinesLayer("pedestrian_areas");
+            layer.Warnings.Add("Pedestrian area polygons are not exposed reliably via the stable CS1 modding API. This layer is emitted empty in v1; use pedestrian_streets and pedestrian_service_points as the operational layers.");
+            return layer;
+        }
+
+        private void EnsureTransportCache()
+        {
+            if (transportCacheLoaded)
+            {
+                return;
+            }
+
+            transportCacheLoaded = true;
+            transportWarnings.Clear();
+
+            try
+            {
+                Type assemblyType = typeof(NetManager).Assembly.GetType("TransportManager");
+                if (assemblyType == null)
+                {
+                    transportWarnings.Add("TransportManager type was not found.");
+                    return;
+                }
+
+                object manager = GetSingletonInstance(assemblyType);
+                if (manager == null)
+                {
+                    transportWarnings.Add("TransportManager.instance was not available.");
+                    return;
+                }
+
+                Array lineBuffer = GetManagerBuffer(manager, "m_lines");
+                if (lineBuffer == null)
+                {
+                    transportWarnings.Add("TransportManager.m_lines.m_buffer was not available.");
+                    return;
+                }
+
+                MethodInfo getLineNameMethod = assemblyType.GetMethod("GetLineName", BindingFlags.Instance | BindingFlags.Public, null, new Type[] { typeof(ushort) }, null);
+                for (ushort lineId = 0; lineId < lineBuffer.Length; lineId++)
+                {
+                    object line = lineBuffer.GetValue(lineId);
+                    if (!HasCreatedFlag(line))
+                    {
+                        continue;
+                    }
+
+                    TransportLineSnapshot snapshot = new TransportLineSnapshot();
+                    snapshot.LineId = lineId;
+                    snapshot.Name = InvokeString(manager, getLineNameMethod, lineId) ?? ("Line " + lineId.ToString(CultureInfo.InvariantCulture));
+                    snapshot.TransportType = GetTransportTypeFromLine(line);
+                    snapshot.Stops = TryReadStops(line, lineId);
+                    transportLines[lineId] = snapshot;
+                }
+            }
+            catch (Exception ex)
+            {
+                transportWarnings.Add("Transport line export failed: " + ex.Message);
+            }
+        }
+
+        private List<ushort> TryReadStops(object line, ushort lineId)
+        {
+            List<ushort> stops = new List<ushort>();
+            Type lineType = line.GetType();
+
+            MethodInfo countStopsMethod = lineType.GetMethod("CountStops", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            MethodInfo getStopMethod = lineType.GetMethod("GetStop", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+            if (countStopsMethod != null && getStopMethod != null)
+            {
+                int count = 0;
+                object[] countArgs = countStopsMethod.GetParameters().Length == 1 ? new object[] { lineId } : new object[0];
+                object countObj = SafeInvoke(line, countStopsMethod, countArgs);
+                if (countObj != null)
+                {
+                    int.TryParse(countObj.ToString(), out count);
+                }
+
+                if (count > 0)
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        object[] stopArgs = getStopMethod.GetParameters().Length == 1 ? new object[] { i } : new object[] { lineId, i };
+                        ushort stopId = ConvertToUshort(SafeInvoke(line, getStopMethod, stopArgs));
+                        if (stopId > 0)
+                        {
+                            stops.Add(stopId);
+                        }
+                    }
+
+                    if (stops.Count > 0)
+                    {
+                        return stops;
+                    }
+                }
+            }
+
+            ushort firstStop = ConvertToUshort(GetMemberValue(line, "m_stops"));
+            if (firstStop == 0)
+            {
+                firstStop = ConvertToUshort(GetMemberValue(line, "m_stop"));
+            }
+
+            if (firstStop == 0)
+            {
+                return stops;
+            }
+
+            HashSet<ushort> visited = new HashSet<ushort>();
+            ushort currentStop = firstStop;
+            while (currentStop != 0 && !visited.Contains(currentStop))
+            {
+                visited.Add(currentStop);
+                stops.Add(currentStop);
+                object node = netManager.m_nodes.m_buffer[currentStop];
+                ushort nextStop = ConvertToUshort(GetMemberValue(node, "m_nextBuildingNode"));
+                if (nextStop == 0 || nextStop == firstStop)
+                {
+                    break;
+                }
+
+                currentStop = nextStop;
+            }
+
+            return stops;
+        }
+
+        private GeoSkylinesGeometry BuildSegmentGeometry(NetSegment segment)
+        {
+            ushort startNodeId = segment.m_startNode;
+            ushort endNodeId = segment.m_endNode;
+            Vector3 startDirection = segment.m_startDirection;
+            Vector3 endDirection = segment.m_endDirection;
+
+            if ((segment.m_flags & NetSegment.Flags.Invert) != NetSegment.Flags.None)
+            {
+                startNodeId = segment.m_endNode;
+                endNodeId = segment.m_startNode;
+                startDirection = segment.m_endDirection;
+                endDirection = segment.m_startDirection;
+            }
+
+            Vector3 startPos = netManager.m_nodes.m_buffer[startNodeId].m_position;
+            Vector3 endPos = netManager.m_nodes.m_buffer[endNodeId].m_position;
+            List<GeoSkylinesCoordinate> points = new List<GeoSkylinesCoordinate>();
+            points.Add(ToCoordinate(startPos));
+
+            if (Vector3.Angle(startDirection, -endDirection) > 3f)
+            {
+                Vector3 controlA;
+                Vector3 controlB;
+                NetSegment.CalculateMiddlePoints(startPos, startDirection, endPos, endDirection, false, false, out controlA, out controlB);
+                Bezier3 bezier = new Bezier3(startPos, controlA, controlB, endPos);
+                points.Add(ToCoordinate(bezier.Position(0.25f)));
+                points.Add(ToCoordinate(bezier.Position(0.5f)));
+                points.Add(ToCoordinate(bezier.Position(0.75f)));
+            }
+
+            points.Add(ToCoordinate(endPos));
+
+            GeoSkylinesGeometry geometry = new GeoSkylinesGeometry("LineString");
+            geometry.Parts.Add(points);
+            return geometry;
+        }
+
+        private GeoSkylinesGeometry BuildBuildingGeometry(Building building)
+        {
+            int width = building.Width;
+            int length = building.Length;
+            Vector3 axisA = new Vector3(Mathf.Cos(building.m_angle), 0f, Mathf.Sin(building.m_angle)) * 8f;
+            Vector3 axisB = new Vector3(axisA.z, 0f, -axisA.x);
+            Vector3 startCorner = building.m_position - (width * 0.5f * axisA) - (length * 0.5f * axisB);
+            Vector3[] corners = new Vector3[]
+            {
+                startCorner,
+                building.m_position + (width * 0.5f * axisA) - (length * 0.5f * axisB),
+                building.m_position + (width * 0.5f * axisA) + (length * 0.5f * axisB),
+                building.m_position - (width * 0.5f * axisA) + (length * 0.5f * axisB),
+                startCorner
+            };
+
+            return CreatePolygonGeometry(corners);
+        }
+
+        private GeoSkylinesGeometry BuildZoneGeometry(ZoneBlock zoneBlock)
+        {
+            int width = 4;
+            int length = zoneBlock.RowCount;
+            Vector3 axisA = new Vector3(Mathf.Cos(zoneBlock.m_angle), 0f, Mathf.Sin(zoneBlock.m_angle)) * 8f;
+            Vector3 axisB = new Vector3(axisA.z, 0f, -axisA.x);
+            Vector3 startCorner = zoneBlock.m_position - (width * 0.5f * axisA) - (length * 0.5f * axisB);
+            Vector3[] corners = new Vector3[]
+            {
+                startCorner,
+                zoneBlock.m_position + (width * 0.5f * axisA) - (length * 0.5f * axisB),
+                zoneBlock.m_position + (width * 0.5f * axisA) + (length * 0.5f * axisB),
+                zoneBlock.m_position - (width * 0.5f * axisA) + (length * 0.5f * axisB),
+                startCorner
+            };
+
+            return CreatePolygonGeometry(corners);
+        }
+
+        private GeoSkylinesGeometry CreatePolygonGeometry(IEnumerable<Vector3> corners)
+        {
+            GeoSkylinesGeometry geometry = new GeoSkylinesGeometry("Polygon");
+            List<GeoSkylinesCoordinate> ring = new List<GeoSkylinesCoordinate>();
+            foreach (Vector3 corner in corners)
+            {
+                ring.Add(ToCoordinate(corner));
+            }
+
+            geometry.Parts.Add(ring);
+            return geometry;
+        }
+
+        private GeoSkylinesGeometry CreatePointGeometry(LatLng point)
+        {
+            GeoSkylinesGeometry geometry = new GeoSkylinesGeometry("Point");
+            geometry.Parts.Add(new List<GeoSkylinesCoordinate> { new GeoSkylinesCoordinate(point.Lng, point.Lat) });
+            return geometry;
+        }
+
+        private GeoSkylinesCoordinate ToCoordinate(Vector3 position)
+        {
+            LatLng point = GamePosition2LatLng(position);
+            return new GeoSkylinesCoordinate(point.Lng, point.Lat);
+        }
+
+        private LatLng GamePosition2LatLng(Vector3 position)
+        {
+            double rwoX = position.x + centerUTM.Easting;
+            double rwoY = position.z + centerUTM.Northing;
+            return convertor.convertUtmToLatLng(rwoX, rwoY, centerUTM.ZoneNumber, zoneLetter);
+        }
+
+        private bool WithinExportCoords(Vector3 position)
+        {
+            return position.x > exportXMin && position.x < exportXMax && position.z > exportYMin && position.z < exportYMax;
+        }
+
+        private float ParseFloatOrDefault(string value, float defaultValue)
+        {
+            float parsed;
+            if (float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed))
+            {
+                return parsed;
+            }
+
+            if (float.TryParse(value, out parsed))
+            {
+                return parsed == 0f ? defaultValue : parsed;
+            }
+
+            return defaultValue;
+        }
+
+        private string BuildBaseFileName(string layerName)
+        {
+            string safeMapName = SanitizeFileName(string.IsNullOrEmpty(mapName) ? "GeoSkylines" : mapName);
+            string safeLayerName = SanitizeFileName(layerName);
+            return safeMapName + "_" + safeLayerName;
+        }
+
+        private void WriteLegacyCsvAliasIfNeeded(GeoSkylinesLayer layer, string csvPath)
+        {
+            string legacyName = null;
+            switch (layer.Name)
+            {
+                case "roads":
+                    legacyName = "roads_cs.csv";
+                    break;
+                case "rails":
+                    legacyName = "rails_cs.csv";
+                    break;
+                case "buildings":
+                    legacyName = "buildings_cs.csv";
+                    break;
+                case "zones":
+                    legacyName = "zones_cs.csv";
+                    break;
+                case "trees":
+                    legacyName = "trees_cs.csv";
+                    break;
+            }
+
+            if (legacyName == null)
+            {
+                return;
+            }
+
+            string legacyPath = Path.Combine(GeoSkylinesConfig.GetFilesDirectory(), legacyName);
+            File.Copy(csvPath, legacyPath, true);
+        }
+
+        private void RunCliIfConfigured(GeoSkylinesManifest manifest)
+        {
+            string[] formats = config.GetExportFormats();
+            bool needsCli = formats.Contains("shp") || formats.Contains("parquet");
+            if (!needsCli)
+            {
+                return;
+            }
+
+            string cliPath = config.GetValue(GeoSkylinesConfig.ExportCliPathKey, string.Empty);
+            manifest.CliPath = cliPath;
+
+            if (!config.GetBool(GeoSkylinesConfig.ExportRunCliKey, false))
+            {
+                manifest.Warnings.Add("CLI conversion was skipped because ExportRunCli=false.");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(cliPath) || !File.Exists(cliPath))
+            {
+                manifest.Warnings.Add("CLI conversion was requested but ExportCliPath is missing or invalid.");
+                return;
+            }
+
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = cliPath;
+            startInfo.Arguments = "--input-dir \"" + manifest.OutputDirectory + "\" --formats \"" + string.Join(",", formats.Where(delegate(string format) { return format == "shp" || format == "parquet"; }).ToArray()) + "\"";
+            startInfo.CreateNoWindow = true;
+            startInfo.UseShellExecute = false;
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
+
+            using (Process process = Process.Start(startInfo))
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                string error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                manifest.CliExitCode = process.ExitCode.ToString(CultureInfo.InvariantCulture);
+                manifest.CliOutput = (output + "\n" + error).Trim();
+                if (process.ExitCode != 0)
+                {
+                    manifest.Warnings.Add("CLI conversion failed. See cli_output in the manifest.");
+                }
+            }
+        }
+
+        private static string SanitizeFileName(string value)
+        {
+            char[] invalid = Path.GetInvalidFileNameChars();
+            string safe = value;
+            foreach (char ch in invalid)
+            {
+                safe = safe.Replace(ch, '_');
+            }
+
+            return safe.Replace(' ', '_');
+        }
+
+        private string GetSegmentName(ushort segmentId, NetSegment segment)
+        {
+            string roadName = netManager.GetSegmentName(segmentId);
+            if (string.IsNullOrEmpty(roadName))
+            {
+                roadName = SafeString(segment.Info.name);
+            }
+
+            return roadName;
+        }
+
+        private string GetBuildingName(ushort buildingId, Building building)
+        {
+            try
+            {
+                MethodInfo getBuildingNameMethod = buildingManager.GetType().GetMethod("GetBuildingName", BindingFlags.Instance | BindingFlags.Public);
+                if (getBuildingNameMethod != null)
+                {
+                    ParameterInfo[] parameters = getBuildingNameMethod.GetParameters();
+                    object result = null;
+                    if (parameters.Length == 2)
+                    {
+                        result = getBuildingNameMethod.Invoke(buildingManager, new object[] { buildingId, InstanceID.Empty });
+                    }
+                    else if (parameters.Length == 1)
+                    {
+                        result = getBuildingNameMethod.Invoke(buildingManager, new object[] { buildingId });
+                    }
+
+                    string name = SafeString(result);
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        return name;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return SafeString(building.Info.name);
+        }
+
+        private float GetElevationAtNode(ushort nodeId)
+        {
+            Vector3 position = netManager.m_nodes.m_buffer[nodeId].m_position;
+            float terrainHeight = terrainManager.SampleRawHeightSmoothWithWater(position, false, 0f);
+            return position.y - terrainHeight;
+        }
+
+        private bool IsTransitFacility(Building building)
+        {
+            if (building.Info == null)
+            {
+                return false;
+            }
+
+            string text = SafeLower(BuildSearchText(building.Info));
+            string service = building.Info.m_class.m_service.ToString().ToLowerInvariant();
+            return service.Contains("publictransport")
+                || text.Contains("metro")
+                || text.Contains("train")
+                || text.Contains("bus")
+                || text.Contains("tram")
+                || text.Contains("ferry")
+                || text.Contains("harbor")
+                || text.Contains("monorail")
+                || text.Contains("cable car")
+                || text.Contains("taxi")
+                || text.Contains("airport");
+        }
+
+        private bool IsTransitHub(Building building)
+        {
+            if (!IsTransitFacility(building))
+            {
+                return false;
+            }
+
+            string text = SafeLower(BuildSearchText(building.Info));
+            return text.Contains("hub") || text.Contains("exchange") || text.Contains("terminal");
+        }
+
+        private bool IsPedestrianServicePoint(Building building)
+        {
+            if (building.Info == null)
+            {
+                return false;
+            }
+
+            string text = SafeLower(BuildSearchText(building.Info));
+            return text.Contains("service point");
+        }
+
+        private string ClassifyTransportMode(string infoText)
+        {
+            if (infoText.Contains("metro"))
+            {
+                return "metro";
+            }
+            if (infoText.Contains("tram"))
+            {
+                return "tram";
+            }
+            if (infoText.Contains("monorail"))
+            {
+                return "monorail";
+            }
+            if (infoText.Contains("ferry"))
+            {
+                return "ferry";
+            }
+            if (infoText.Contains("ship") || infoText.Contains("harbor"))
+            {
+                return "ship";
+            }
+            if (infoText.Contains("pedestrian") || infoText.Contains("promenade"))
+            {
+                return "pedestrian";
+            }
+            if (infoText.Contains("train"))
+            {
+                return "train";
+            }
+            return "road";
+        }
+
+        private string ClassifyBuildingTransportHint(Building building)
+        {
+            if (IsPedestrianServicePoint(building))
+            {
+                return "pedestrian_service_point";
+            }
+            if (IsTransitHub(building))
+            {
+                return "transit_hub";
+            }
+            if (IsTransitFacility(building))
+            {
+                return "transit_facility";
+            }
+            return "none";
+        }
+
+        private string BuildSearchText(object prefab)
+        {
+            if (prefab == null)
+            {
+                return string.Empty;
+            }
+
+            object generatedTitle = null;
+            MethodInfo method = prefab.GetType().GetMethod("GetGeneratedTitle", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (method != null)
+            {
+                generatedTitle = SafeInvoke(prefab, method, new object[0]);
+            }
+
+            string text = SafeString(GetMemberValue(prefab, "name")) + " " + SafeString(generatedTitle) + " " + SafeString(GetMemberValue(prefab, "category"));
+            return text;
+        }
+
+        private static string SafeLower(string value)
+        {
+            return (value ?? string.Empty).ToLowerInvariant();
+        }
+
+        private static string SafeString(object value)
+        {
+            return value == null ? string.Empty : value.ToString();
+        }
+
+        private static object GetMemberValue(object instance, string memberName)
+        {
+            if (instance == null)
+            {
+                return null;
+            }
+
+            Type type = instance.GetType();
+            FieldInfo field = type.GetField(memberName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (field != null)
+            {
+                return field.GetValue(instance);
+            }
+
+            PropertyInfo property = type.GetProperty(memberName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (property != null)
+            {
+                return property.GetValue(instance, null);
+            }
+
+            return null;
+        }
+
+        private static object GetSingletonInstance(Type type)
+        {
+            PropertyInfo property = type.GetProperty("instance", BindingFlags.Public | BindingFlags.Static);
+            if (property != null)
+            {
+                return property.GetValue(null, null);
+            }
+
+            FieldInfo field = type.GetField("instance", BindingFlags.Public | BindingFlags.Static);
+            if (field != null)
+            {
+                return field.GetValue(null);
+            }
+
+            return null;
+        }
+
+        private static Array GetManagerBuffer(object manager, string arrayFieldName)
+        {
+            object bufferWrapper = GetMemberValue(manager, arrayFieldName);
+            if (bufferWrapper == null)
+            {
+                return null;
+            }
+
+            object rawBuffer = GetMemberValue(bufferWrapper, "m_buffer");
+            return rawBuffer as Array;
+        }
+
+        private static bool HasCreatedFlag(object instance)
+        {
+            object flags = GetMemberValue(instance, "m_flags");
+            return flags != null && flags.ToString().Contains("Created");
+        }
+
+        private static ushort ConvertToUshort(object value)
+        {
+            if (value == null)
+            {
+                return 0;
+            }
+
+            ushort converted;
+            if (ushort.TryParse(value.ToString(), out converted))
+            {
+                return converted;
+            }
+
+            try
+            {
+                return Convert.ToUInt16(value, CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static object SafeInvoke(object instance, MethodInfo method, object[] arguments)
+        {
+            try
+            {
+                return method.Invoke(instance, arguments);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string InvokeString(object instance, MethodInfo method, ushort lineId)
+        {
+            if (method == null)
+            {
+                return null;
+            }
+
+            object result = SafeInvoke(instance, method, new object[] { lineId });
+            return result == null ? null : result.ToString();
+        }
+
+        private string GetTransportTypeFromLine(object line)
+        {
+            object transportType = GetMemberValue(line, "m_transportType");
+            if (transportType != null)
+            {
+                return transportType.ToString();
+            }
+
+            object info = GetMemberValue(line, "Info") ?? GetMemberValue(line, "m_info");
+            object innerTransportType = GetMemberValue(info, "m_transportType");
+            if (innerTransportType != null)
+            {
+                return innerTransportType.ToString();
+            }
+
+            return "unknown";
+        }
+
+        private void AddMemberAttributes(IDictionary<string, string> attributes, object instance, string prefix)
+        {
+            Type type = instance.GetType();
+            foreach (FieldInfo field in type.GetFields(BindingFlags.Instance | BindingFlags.Public))
+            {
+                object value = field.GetValue(instance);
+                if (value == null)
+                {
+                    continue;
+                }
+
+                string key = prefix + "_" + field.Name.ToLowerInvariant();
+                if (!attributes.ContainsKey(key))
+                {
+                    attributes.Add(key, SafeString(value));
+                }
+            }
+
+            foreach (PropertyInfo property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+            {
+                if (!property.CanRead || property.GetIndexParameters().Length > 0)
+                {
+                    continue;
+                }
+
+                object value;
+                try
+                {
+                    value = property.GetValue(instance, null);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (value == null)
+                {
+                    continue;
+                }
+
+                string key = prefix + "_" + property.Name.ToLowerInvariant();
+                if (!attributes.ContainsKey(key))
+                {
+                    attributes.Add(key, SafeString(value));
+                }
+            }
         }
     }
 }
