@@ -19,7 +19,134 @@ namespace GeoSkylines
             public ushort LineId;
             public string Name;
             public string TransportType;
+            public string RuntimeType;
             public List<ushort> Stops = new List<ushort>();
+        }
+
+        private sealed class GeoSkylinesExportLayerDefinition
+        {
+            public string Name;
+            public string SourceSystem;
+            public bool Experimental;
+            public string LegacyCsvAlias;
+            public Func<GeoSkylinesLayer> Builder;
+        }
+
+        private sealed class NetworkClassification
+        {
+            public string LayerName;
+            public string AIType;
+            public string TransportType;
+            public string ClassificationStatus;
+            public string LaneTypes;
+            public string VehicleTypes;
+        }
+
+        private sealed class BuildingClassification
+        {
+            public string AIType;
+            public string PrimaryLayer;
+            public string ClassificationStatus;
+            public bool IsTransitFacility;
+            public bool IsTransitHub;
+            public bool IsWaterFacility;
+            public bool IsFishingFacility;
+            public bool IsPedestrianServicePoint;
+            public bool IsAirportBuilding;
+            public bool IsCampusBuilding;
+            public bool IsIndustryBuilding;
+            public bool IsOutsideConnectionBuilding;
+        }
+
+        private struct GridPoint
+        {
+            public int X;
+            public int Z;
+
+            public GridPoint(int x, int z)
+            {
+                X = x;
+                Z = z;
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    return (X * 397) ^ Z;
+                }
+            }
+
+            public override bool Equals(object obj)
+            {
+                if (!(obj is GridPoint))
+                {
+                    return false;
+                }
+
+                GridPoint other = (GridPoint)obj;
+                return X == other.X && Z == other.Z;
+            }
+        }
+
+        private struct GridEdgeKey
+        {
+            public GridPoint A;
+            public GridPoint B;
+
+            public GridEdgeKey(GridPoint a, GridPoint b)
+            {
+                if (a.X < b.X || (a.X == b.X && a.Z <= b.Z))
+                {
+                    A = a;
+                    B = b;
+                }
+                else
+                {
+                    A = b;
+                    B = a;
+                }
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    return (A.GetHashCode() * 397) ^ B.GetHashCode();
+                }
+            }
+
+            public override bool Equals(object obj)
+            {
+                if (!(obj is GridEdgeKey))
+                {
+                    return false;
+                }
+
+                GridEdgeKey other = (GridEdgeKey)obj;
+                return A.Equals(other.A) && B.Equals(other.B);
+            }
+        }
+
+        private struct DirectedGridEdge
+        {
+            public GridPoint Start;
+            public GridPoint End;
+
+            public DirectedGridEdge(GridPoint start, GridPoint end)
+            {
+                Start = start;
+                End = end;
+            }
+        }
+
+        private sealed class AreaAccumulator
+        {
+            public string LayerName;
+            public int AreaId;
+            public string Name;
+            public string AreaType;
+            public HashSet<long> Cells = new HashSet<long>();
         }
 
         private readonly WGS84_UTM convertor = new WGS84_UTM(null);
@@ -27,9 +154,17 @@ namespace GeoSkylines
         private readonly NetManager netManager = NetManager.instance;
         private readonly BuildingManager buildingManager = BuildingManager.instance;
         private readonly TerrainManager terrainManager = TerrainManager.instance;
+        private readonly DistrictManager districtManager = DistrictManager.instance;
+        private readonly ZoneManager zoneManager = ZoneManager.instance;
+        private readonly TreeManager treeManager = TreeManager.instance;
+        private readonly PropManager propManager = PropManager.instance;
         private readonly GeoSkylinesConfig config;
+        private readonly Dictionary<string, GeoSkylinesExportLayerDefinition> layerDefinitions = new Dictionary<string, GeoSkylinesExportLayerDefinition>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<ushort, TransportLineSnapshot> transportLines = new Dictionary<ushort, TransportLineSnapshot>();
         private readonly List<string> transportWarnings = new List<string>();
+        private readonly Dictionary<string, GeoSkylinesLayer> networkLayerCache = new Dictionary<string, GeoSkylinesLayer>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, GeoSkylinesLayer> buildingLayerCache = new Dictionary<string, GeoSkylinesLayer>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, GeoSkylinesLayer> areaLayerCache = new Dictionary<string, GeoSkylinesLayer>(StringComparer.OrdinalIgnoreCase);
 
         private UTMResult centerUTM;
         private string zoneLetter = "N";
@@ -43,11 +178,19 @@ namespace GeoSkylines
         private bool confloaded;
         private bool includeExtendedAttributes;
         private bool transportCacheLoaded;
+        private bool networkCacheLoaded;
+        private bool buildingCacheLoaded;
+        private bool areaCacheLoaded;
+        private GeoSkylinesLayer treesLayerCache;
+        private GeoSkylinesLayer zonesLayerCache;
+        private GeoSkylinesLayer propsLayerCache;
+        private GeoSkylinesLayer waterSourcesLayerCache;
 
         public GeoSkylinesExport()
         {
             config = GeoSkylinesConfig.Load();
             LoadConfiguration();
+            RegisterLayerDefinitions();
 
             if (confloaded)
             {
@@ -61,7 +204,7 @@ namespace GeoSkylines
             string configPath = config.ConfigPath;
             if (!File.Exists(configPath))
             {
-                panel.SetMessage("GeoSkylines", "No configuration file provided!", false);
+                panel.SetMessage("GeoSkylines", "No configuration file found.\nExpected path: " + configPath, false);
                 confloaded = false;
                 return;
             }
@@ -89,12 +232,12 @@ namespace GeoSkylines
 
         public void ExportSegments()
         {
-            ExecuteExport(new string[] { "roads", "rails" });
+            ExecuteExport(new string[] { "roads", "rails", "metro_tracks", "tram_tracks", "monorail_tracks", "trolleybus_roads", "ship_paths", "fishing_paths", "canals", "water_pipes", "pedestrian_streets", "pedestrian_paths", "transport_guideways", "outside_connection_segments", "network_unknown" });
         }
 
         public void ExportBuildings()
         {
-            ExecuteExport(new string[] { "buildings" });
+            ExecuteExport(new string[] { "buildings", "transit_facilities", "transit_hubs", "water_facilities", "fishing_facilities", "pedestrian_service_points", "airport_buildings", "campus_buildings", "industry_buildings", "outside_connection_buildings" });
         }
 
         public void ExportZones()
@@ -139,7 +282,7 @@ namespace GeoSkylines
             ExceptionPanel panel = UIView.library.ShowModal<ExceptionPanel>("ExceptionPanel");
             if (!File.Exists(configPath))
             {
-                panel.SetMessage("GeoSkylines", "No configuration file provided!", false);
+                panel.SetMessage("GeoSkylines", "No configuration file found.\nExpected path: " + configPath, false);
                 return;
             }
 
@@ -212,29 +355,80 @@ namespace GeoSkylines
                     continue;
                 }
 
-                string infoTxt = segment.Info.ToString();
-                if (infoTxt.Contains("Train Line") || infoTxt.Contains("Train Track"))
+                string aiType = GetNetAIType(segment.Info);
+                if (aiType == "TrainTrackAI")
                 {
                     netManager.ReleaseSegment((ushort)i, false);
                 }
             }
         }
 
-        private void ExecuteExport(IEnumerable<string> requestedLayers)
+        private void RegisterLayerDefinitions()
+        {
+            RegisterLayer("roads", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("roads"); }, "roads_cs.csv");
+            RegisterLayer("rails", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("rails"); }, "rails_cs.csv");
+            RegisterLayer("metro_tracks", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("metro_tracks"); }, null);
+            RegisterLayer("tram_tracks", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("tram_tracks"); }, null);
+            RegisterLayer("monorail_tracks", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("monorail_tracks"); }, null);
+            RegisterLayer("trolleybus_roads", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("trolleybus_roads"); }, null);
+            RegisterLayer("pedestrian_streets", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("pedestrian_streets"); }, null);
+            RegisterLayer("pedestrian_paths", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("pedestrian_paths"); }, null);
+            RegisterLayer("ship_paths", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("ship_paths"); }, null);
+            RegisterLayer("fishing_paths", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("fishing_paths"); }, null);
+            RegisterLayer("canals", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("canals"); }, null);
+            RegisterLayer("water_pipes", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("water_pipes"); }, null);
+            RegisterLayer("transport_guideways", "net_manager", true, delegate { return BuildNetworkSegmentsLayer("transport_guideways"); }, null);
+            RegisterLayer("outside_connection_nodes", "net_manager", false, delegate { return BuildNetworkNodesLayer("outside_connection_nodes"); }, null);
+            RegisterLayer("outside_connection_segments", "net_manager", false, delegate { return BuildNetworkSegmentsLayer("outside_connection_segments"); }, null);
+            RegisterLayer("network_nodes", "net_manager", false, delegate { return BuildNetworkNodesLayer("network_nodes"); }, null);
+            RegisterLayer("network_unknown", "net_manager", true, delegate { return BuildNetworkSegmentsLayer("network_unknown"); }, null);
+            RegisterLayer("districts", "district_manager", false, delegate { return BuildAreaLayer("districts"); }, null);
+            RegisterLayer("park_areas", "district_manager", false, delegate { return BuildAreaLayer("park_areas"); }, null);
+            RegisterLayer("industry_areas", "district_manager", false, delegate { return BuildAreaLayer("industry_areas"); }, null);
+            RegisterLayer("campus_areas", "district_manager", false, delegate { return BuildAreaLayer("campus_areas"); }, null);
+            RegisterLayer("airport_areas", "district_manager", false, delegate { return BuildAreaLayer("airport_areas"); }, null);
+            RegisterLayer("pedestrian_areas", "district_manager", false, delegate { return BuildAreaLayer("pedestrian_areas"); }, null);
+            RegisterLayer("buildings", "building_manager", false, delegate { return BuildBuildingLayer("buildings"); }, "buildings_cs.csv");
+            RegisterLayer("transit_facilities", "building_manager", false, delegate { return BuildBuildingLayer("transit_facilities"); }, null);
+            RegisterLayer("transit_hubs", "building_manager", true, delegate { return BuildBuildingLayer("transit_hubs"); }, null);
+            RegisterLayer("water_facilities", "building_manager", false, delegate { return BuildBuildingLayer("water_facilities"); }, null);
+            RegisterLayer("fishing_facilities", "building_manager", false, delegate { return BuildBuildingLayer("fishing_facilities"); }, null);
+            RegisterLayer("pedestrian_service_points", "building_manager", false, delegate { return BuildBuildingLayer("pedestrian_service_points"); }, null);
+            RegisterLayer("airport_buildings", "building_manager", false, delegate { return BuildBuildingLayer("airport_buildings"); }, null);
+            RegisterLayer("campus_buildings", "building_manager", false, delegate { return BuildBuildingLayer("campus_buildings"); }, null);
+            RegisterLayer("industry_buildings", "building_manager", false, delegate { return BuildBuildingLayer("industry_buildings"); }, null);
+            RegisterLayer("outside_connection_buildings", "building_manager", false, delegate { return BuildBuildingLayer("outside_connection_buildings"); }, null);
+            RegisterLayer("transit_lines", "transport_manager", true, delegate { return BuildTransitLinesLayer(); }, null);
+            RegisterLayer("transit_stops", "transport_manager", true, delegate { return BuildTransitStopsLayer(); }, null);
+            RegisterLayer("trees", "tree_manager", false, delegate { return BuildTreesLayer(); }, "trees_cs.csv");
+            RegisterLayer("props", "prop_manager", true, delegate { return BuildPropsLayer(); }, null);
+            RegisterLayer("water_sources", "water_manager", false, delegate { return BuildWaterSourcesLayer(); }, null);
+            RegisterLayer("zones", "zone_manager", false, delegate { return BuildZonesLayer(); }, "zones_cs.csv");
+        }
+
+        private void RegisterLayer(string name, string sourceSystem, bool experimental, Func<GeoSkylinesLayer> builder, string legacyCsvAlias)
+        {
+            GeoSkylinesExportLayerDefinition definition = new GeoSkylinesExportLayerDefinition();
+            definition.Name = name;
+            definition.SourceSystem = sourceSystem;
+            definition.Experimental = experimental;
+            definition.Builder = builder;
+            definition.LegacyCsvAlias = legacyCsvAlias;
+            layerDefinitions[name] = definition;
+        }
+
+        private void ExecuteExport(IEnumerable<string> layersToExport)
         {
             if (!confloaded)
             {
                 return;
             }
 
-            string[] layersToExport = requestedLayers
-                .Select(delegate(string layer) { return (layer ?? string.Empty).Trim().ToLowerInvariant(); })
-                .Where(delegate(string layer) { return !string.IsNullOrEmpty(layer); })
-                .Distinct()
-                .ToArray();
-
             string outputDirectory = config.GetOutputDirectory();
-            Directory.CreateDirectory(outputDirectory);
+            if (!Directory.Exists(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
 
             GeoSkylinesManifest manifest = new GeoSkylinesManifest();
             manifest.MapName = mapName;
@@ -245,7 +439,7 @@ namespace GeoSkylines
             string[] configuredFormats = config.GetExportFormats();
             bool requiresGeoJsonForCli = configuredFormats.Any(delegate(string format) { return format == "shp" || format == "parquet"; });
 
-            foreach (string layerName in layersToExport)
+            foreach (string layerName in layersToExport.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 GeoSkylinesLayer layer = BuildLayer(layerName);
                 manifest.Layers.Add(layer);
@@ -287,44 +481,83 @@ namespace GeoSkylines
 
         private GeoSkylinesLayer BuildLayer(string layerName)
         {
-            switch (layerName)
+            GeoSkylinesExportLayerDefinition definition;
+            if (!layerDefinitions.TryGetValue(layerName, out definition))
             {
-                case "roads":
-                    return BuildRoadLikeLayer("roads", false, false);
-                case "rails":
-                    return BuildRoadLikeLayer("rails", true, false);
-                case "pedestrian_streets":
-                    return BuildRoadLikeLayer("pedestrian_streets", false, true);
-                case "buildings":
-                    return BuildBuildingsLayer();
-                case "zones":
-                    return BuildZonesLayer();
-                case "trees":
-                    return BuildTreesLayer();
-                case "transit_facilities":
-                    return BuildFilteredBuildingsLayer("transit_facilities", IsTransitFacility);
-                case "transit_hubs":
-                    return BuildFilteredBuildingsLayer("transit_hubs", IsTransitHub);
-                case "pedestrian_service_points":
-                    return BuildFilteredBuildingsLayer("pedestrian_service_points", IsPedestrianServicePoint);
-                case "outside_connections":
-                    return BuildOutsideConnectionsLayer();
-                case "transit_lines":
-                    return BuildTransitLinesLayer();
-                case "transit_stops":
-                    return BuildTransitStopsLayer();
-                case "pedestrian_areas":
-                    return BuildPedestrianAreasLayer();
-                default:
-                    GeoSkylinesLayer emptyLayer = new GeoSkylinesLayer(layerName);
-                    emptyLayer.Warnings.Add("Unknown layer: " + layerName);
-                    return emptyLayer;
+                GeoSkylinesLayer emptyLayer = new GeoSkylinesLayer(layerName);
+                emptyLayer.Warnings.Add("Unknown layer: " + layerName);
+                return emptyLayer;
             }
+
+            GeoSkylinesLayer layer = definition.Builder();
+            if (layer.SourceSystem == "unknown")
+            {
+                layer.SourceSystem = definition.SourceSystem;
+            }
+
+            layer.Experimental = definition.Experimental;
+            return layer;
         }
 
-        private GeoSkylinesLayer BuildRoadLikeLayer(string layerName, bool railsOnly, bool pedestrianOnly)
+        private GeoSkylinesLayer CreateLayer(string name)
         {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer(layerName);
+            GeoSkylinesLayer layer = new GeoSkylinesLayer(name);
+            GeoSkylinesExportLayerDefinition definition;
+            if (layerDefinitions.TryGetValue(name, out definition))
+            {
+                layer.SourceSystem = definition.SourceSystem;
+                layer.Experimental = definition.Experimental;
+            }
+
+            return layer;
+        }
+
+        private GeoSkylinesLayer BuildNetworkSegmentsLayer(string targetLayer)
+        {
+            EnsureNetworkLayerCache();
+            return networkLayerCache[targetLayer];
+        }
+
+        private GeoSkylinesLayer BuildNetworkNodesLayer(string targetLayer)
+        {
+            EnsureNetworkLayerCache();
+            return networkLayerCache[targetLayer];
+        }
+
+        private void EnsureNetworkLayerCache()
+        {
+            if (networkCacheLoaded)
+            {
+                return;
+            }
+
+            networkCacheLoaded = true;
+            string[] networkLayers = new string[]
+            {
+                "roads",
+                "rails",
+                "metro_tracks",
+                "tram_tracks",
+                "monorail_tracks",
+                "trolleybus_roads",
+                "pedestrian_streets",
+                "pedestrian_paths",
+                "ship_paths",
+                "fishing_paths",
+                "canals",
+                "water_pipes",
+                "transport_guideways",
+                "outside_connection_nodes",
+                "outside_connection_segments",
+                "network_nodes",
+                "network_unknown"
+            };
+
+            foreach (string layerName in networkLayers)
+            {
+                networkLayerCache[layerName] = CreateLayer(layerName);
+            }
+
             NetSegment[] segments = netManager.m_segments.m_buffer;
             for (int i = 0; i < segments.Length; i++)
             {
@@ -334,47 +567,31 @@ namespace GeoSkylines
                     continue;
                 }
 
-                string infoText = SafeLower(segment.Info.ToString());
-                if (infoText.Contains("water pipe"))
-                {
-                    continue;
-                }
-
-                bool isRail = infoText.Contains("train line") || infoText.Contains("train track");
-                bool isPedestrian = infoText.Contains("pedestrian") || infoText.Contains("promenade");
-
-                if (railsOnly != isRail)
-                {
-                    continue;
-                }
-
-                if (pedestrianOnly && !isPedestrian)
-                {
-                    continue;
-                }
-
-                if (!railsOnly && !pedestrianOnly && isRail)
-                {
-                    continue;
-                }
-
                 if (!WithinExportCoords(segment.m_middlePosition))
                 {
                     continue;
                 }
 
-                GeoSkylinesGeometry geometry = BuildSegmentGeometry(segment);
-                string featureId = i.ToString(CultureInfo.InvariantCulture);
-                GeoSkylinesFeature feature = new GeoSkylinesFeature(layerName, featureId, geometry);
-                feature.Attributes.Add("id", featureId);
+                NetworkClassification classification = ClassifyNetworkSegment((ushort)i, segment);
+                GeoSkylinesLayer layer = networkLayerCache[classification.LayerName];
+                GeoSkylinesFeature feature = new GeoSkylinesFeature(classification.LayerName, i.ToString(CultureInfo.InvariantCulture), BuildSegmentGeometry(segment));
+                feature.Attributes.Add("id", i.ToString(CultureInfo.InvariantCulture));
                 feature.Attributes.Add("name", GetSegmentName((ushort)i, segment));
                 feature.Attributes.Add("prefab", SafeString(segment.Info.name));
                 feature.Attributes.Add("service", segment.Info.m_class.m_service.ToString());
                 feature.Attributes.Add("sub_service", segment.Info.m_class.m_subService.ToString());
+                feature.Attributes.Add("ai_type", classification.AIType);
+                feature.Attributes.Add("lane_types", classification.LaneTypes);
+                feature.Attributes.Add("transport_type", classification.TransportType);
+                feature.Attributes.Add("vehicle_types", classification.VehicleTypes);
+                feature.Attributes.Add("segment_flags", segment.m_flags.ToString());
+                feature.Attributes.Add("segment_flags2", segment.m_flags2.ToString());
+                feature.Attributes.Add("node_start_flags", netManager.m_nodes.m_buffer[segment.m_startNode].m_flags.ToString());
+                feature.Attributes.Add("node_end_flags", netManager.m_nodes.m_buffer[segment.m_endNode].m_flags.ToString());
+                feature.Attributes.Add("classification_layer", classification.LayerName);
+                feature.Attributes.Add("classification_status", classification.ClassificationStatus);
                 feature.Attributes.Add("elevation_start", GetElevationAtNode(segment.m_startNode).ToString("R", CultureInfo.InvariantCulture));
                 feature.Attributes.Add("elevation_end", GetElevationAtNode(segment.m_endNode).ToString("R", CultureInfo.InvariantCulture));
-                feature.Attributes.Add("transport_hint", ClassifyTransportMode(infoText));
-                feature.Attributes.Add("pedestrian_hint", isPedestrian.ToString().ToLowerInvariant());
 
                 if (includeExtendedAttributes)
                 {
@@ -384,22 +601,220 @@ namespace GeoSkylines
                 layer.Features.Add(feature);
             }
 
-            return layer;
+            NetNode[] nodes = netManager.m_nodes.m_buffer;
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                NetNode node = nodes[i];
+                if ((node.m_flags & NetNode.Flags.Created) == NetNode.Flags.None)
+                {
+                    continue;
+                }
+
+                if (!WithinExportCoords(node.m_position))
+                {
+                    continue;
+                }
+
+                string connectedLayers = string.Join("|", GetConnectedSegmentLayers(node).Distinct().OrderBy(delegate(string item) { return item; }).ToArray());
+                byte districtId = districtManager.GetDistrict(node.m_position);
+                byte parkId = districtManager.GetPark(node.m_position);
+
+                if ((node.m_flags & NetNode.Flags.Outside) != NetNode.Flags.None)
+                {
+                    GeoSkylinesFeature outsideFeature = new GeoSkylinesFeature("outside_connection_nodes", i.ToString(CultureInfo.InvariantCulture), CreatePointGeometry(GamePosition2LatLng(node.m_position)));
+                    outsideFeature.Attributes.Add("id", i.ToString(CultureInfo.InvariantCulture));
+                    outsideFeature.Attributes.Add("flags", node.m_flags.ToString());
+                    outsideFeature.Attributes.Add("flags2", node.m_flags2.ToString());
+                    outsideFeature.Attributes.Add("connected_layers", connectedLayers);
+                    outsideFeature.Attributes.Add("district_id", districtId.ToString(CultureInfo.InvariantCulture));
+                    outsideFeature.Attributes.Add("park_id", parkId.ToString(CultureInfo.InvariantCulture));
+                    networkLayerCache["outside_connection_nodes"].Features.Add(outsideFeature);
+                    continue;
+                }
+
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("network_nodes", i.ToString(CultureInfo.InvariantCulture), CreatePointGeometry(GamePosition2LatLng(node.m_position)));
+                feature.Attributes.Add("id", i.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("flags", node.m_flags.ToString());
+                feature.Attributes.Add("flags2", node.m_flags2.ToString());
+                feature.Attributes.Add("connected_layers", connectedLayers);
+                feature.Attributes.Add("district_id", districtId.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("park_id", parkId.ToString(CultureInfo.InvariantCulture));
+                networkLayerCache["network_nodes"].Features.Add(feature);
+            }
         }
 
-        private GeoSkylinesLayer BuildBuildingsLayer()
+        private NetworkClassification ClassifyNetworkSegment(ushort segmentId, NetSegment segment)
         {
-            return BuildFilteredBuildingsLayer("buildings", delegate(Building building) { return true; });
+            NetworkClassification classification = new NetworkClassification();
+            classification.AIType = GetNetAIType(segment.Info);
+            classification.LaneTypes = GetLaneTypes(segment.Info);
+            classification.VehicleTypes = GetVehicleTypes(segment.Info);
+            classification.TransportType = GetPrimaryTransportType(segment.Info, classification.AIType, classification.VehicleTypes);
+            classification.ClassificationStatus = "net_ai";
+
+            if (IsOutsideConnectionSegment(segment))
+            {
+                classification.LayerName = "outside_connection_segments";
+                classification.ClassificationStatus = "outside_connection";
+                return classification;
+            }
+
+            switch (classification.AIType)
+            {
+                case "CanalAI":
+                    classification.LayerName = "canals";
+                    return classification;
+                case "ShipPathAI":
+                    classification.LayerName = "ship_paths";
+                    return classification;
+                case "FishingPathAI":
+                    classification.LayerName = "fishing_paths";
+                    return classification;
+                case "WaterPipeAI":
+                    classification.LayerName = "water_pipes";
+                    return classification;
+                case "PedestrianZoneRoadAI":
+                case "PedestrianZoneBridgeAI":
+                    classification.LayerName = "pedestrian_streets";
+                    return classification;
+                case "PedestrianWayAI":
+                case "PedestrianPathAI":
+                case "PedestrianBridgeAI":
+                case "PedestrianTunnelAI":
+                    classification.LayerName = "pedestrian_paths";
+                    return classification;
+                case "TransportPathAI":
+                case "TransportLineAI":
+                case "CableCarPathAI":
+                    classification.LayerName = "transport_guideways";
+                    return classification;
+                case "TrainTrackAI":
+                    classification.LayerName = "rails";
+                    return classification;
+                case "MetroTrackAI":
+                    classification.LayerName = "metro_tracks";
+                    return classification;
+                case "MonorailTrackAI":
+                    classification.LayerName = "monorail_tracks";
+                    return classification;
+            }
+
+            string subService = segment.Info.m_class.m_subService.ToString();
+            if (subService.IndexOf("Train", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                classification.LayerName = "rails";
+                classification.ClassificationStatus = "sub_service";
+                return classification;
+            }
+
+            if (subService.IndexOf("Metro", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                classification.LayerName = "metro_tracks";
+                classification.ClassificationStatus = "sub_service";
+                return classification;
+            }
+
+            if (subService.IndexOf("Monorail", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                classification.LayerName = "monorail_tracks";
+                classification.ClassificationStatus = "sub_service";
+                return classification;
+            }
+
+            if (subService.IndexOf("Tram", StringComparison.OrdinalIgnoreCase) >= 0 || classification.VehicleTypes.IndexOf("Tram", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                classification.LayerName = "tram_tracks";
+                classification.ClassificationStatus = "sub_service";
+                return classification;
+            }
+
+            if (subService.IndexOf("Trolleybus", StringComparison.OrdinalIgnoreCase) >= 0 || classification.VehicleTypes.IndexOf("Trolleybus", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                classification.LayerName = "trolleybus_roads";
+                classification.ClassificationStatus = "sub_service";
+                return classification;
+            }
+
+            if (classification.AIType == "RoadAI" || classification.AIType == "RaceRoadAI")
+            {
+                classification.LayerName = "roads";
+                return classification;
+            }
+
+            classification.LayerName = "network_unknown";
+            classification.ClassificationStatus = "unknown";
+            return classification;
         }
 
-        private GeoSkylinesLayer BuildFilteredBuildingsLayer(string layerName, Func<Building, bool> predicate)
+        private bool IsOutsideConnectionSegment(NetSegment segment)
         {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer(layerName);
+            NetNode startNode = netManager.m_nodes.m_buffer[segment.m_startNode];
+            NetNode endNode = netManager.m_nodes.m_buffer[segment.m_endNode];
+            return (startNode.m_flags & NetNode.Flags.Outside) != NetNode.Flags.None
+                || (endNode.m_flags & NetNode.Flags.Outside) != NetNode.Flags.None;
+        }
+
+        private IEnumerable<string> GetConnectedSegmentLayers(NetNode node)
+        {
+            List<string> layers = new List<string>();
+            for (int i = 0; i < 8; i++)
+            {
+                ushort segmentId = ConvertToUshort(GetMemberValue(node, "m_segment" + i.ToString(CultureInfo.InvariantCulture)));
+                if (segmentId == 0)
+                {
+                    continue;
+                }
+
+                NetSegment segment = netManager.m_segments.m_buffer[segmentId];
+                if (segment.Info == null)
+                {
+                    continue;
+                }
+
+                layers.Add(ClassifyNetworkSegment(segmentId, segment).LayerName);
+            }
+
+            return layers;
+        }
+
+        private GeoSkylinesLayer BuildBuildingLayer(string layerName)
+        {
+            EnsureBuildingLayerCache();
+            return buildingLayerCache[layerName];
+        }
+
+        private void EnsureBuildingLayerCache()
+        {
+            if (buildingCacheLoaded)
+            {
+                return;
+            }
+
+            buildingCacheLoaded = true;
+            string[] buildingLayers = new string[]
+            {
+                "buildings",
+                "transit_facilities",
+                "transit_hubs",
+                "water_facilities",
+                "fishing_facilities",
+                "pedestrian_service_points",
+                "airport_buildings",
+                "campus_buildings",
+                "industry_buildings",
+                "outside_connection_buildings"
+            };
+
+            foreach (string layerName in buildingLayers)
+            {
+                buildingLayerCache[layerName] = CreateLayer(layerName);
+            }
+
             Building[] buildings = buildingManager.m_buildings.m_buffer;
             for (int i = 0; i < buildings.Length; i++)
             {
                 Building building = buildings[i];
-                if (building.m_position.y == 0 || building.Info == null)
+                if (building.m_position == Vector3.zero || building.Info == null)
                 {
                     continue;
                 }
@@ -409,43 +824,523 @@ namespace GeoSkylines
                     continue;
                 }
 
-                if (!predicate(building))
+                BuildingClassification classification = ClassifyBuilding((ushort)i, building);
+                AddBuildingFeature(buildingLayerCache["buildings"], "buildings", (ushort)i, building, classification);
+
+                if (classification.IsTransitFacility)
+                {
+                    AddBuildingFeature(buildingLayerCache["transit_facilities"], "transit_facilities", (ushort)i, building, classification);
+                }
+                if (classification.IsTransitHub)
+                {
+                    AddBuildingFeature(buildingLayerCache["transit_hubs"], "transit_hubs", (ushort)i, building, classification);
+                }
+                if (classification.IsWaterFacility)
+                {
+                    AddBuildingFeature(buildingLayerCache["water_facilities"], "water_facilities", (ushort)i, building, classification);
+                }
+                if (classification.IsFishingFacility)
+                {
+                    AddBuildingFeature(buildingLayerCache["fishing_facilities"], "fishing_facilities", (ushort)i, building, classification);
+                }
+                if (classification.IsPedestrianServicePoint)
+                {
+                    AddBuildingFeature(buildingLayerCache["pedestrian_service_points"], "pedestrian_service_points", (ushort)i, building, classification);
+                }
+                if (classification.IsAirportBuilding)
+                {
+                    AddBuildingFeature(buildingLayerCache["airport_buildings"], "airport_buildings", (ushort)i, building, classification);
+                }
+                if (classification.IsCampusBuilding)
+                {
+                    AddBuildingFeature(buildingLayerCache["campus_buildings"], "campus_buildings", (ushort)i, building, classification);
+                }
+                if (classification.IsIndustryBuilding)
+                {
+                    AddBuildingFeature(buildingLayerCache["industry_buildings"], "industry_buildings", (ushort)i, building, classification);
+                }
+                if (classification.IsOutsideConnectionBuilding)
+                {
+                    AddBuildingFeature(buildingLayerCache["outside_connection_buildings"], "outside_connection_buildings", (ushort)i, building, classification);
+                }
+            }
+        }
+
+        private void AddBuildingFeature(GeoSkylinesLayer layer, string layerName, ushort buildingId, Building building, BuildingClassification classification)
+        {
+            GeoSkylinesGeometry geometry = BuildBuildingGeometry(building);
+            string featureId = buildingId.ToString(CultureInfo.InvariantCulture);
+            GeoSkylinesFeature feature = new GeoSkylinesFeature(layerName, featureId, geometry);
+            LatLng centroid = GamePosition2LatLng(building.m_position);
+            byte districtId = districtManager.GetDistrict(building.m_position);
+            byte parkId = districtManager.GetPark(building.m_position);
+            feature.Attributes.Add("id", featureId);
+            feature.Attributes.Add("name", GetBuildingName(buildingId, building));
+            feature.Attributes.Add("prefab", SafeString(building.Info.name));
+            feature.Attributes.Add("service", building.Info.m_class.m_service.ToString());
+            feature.Attributes.Add("sub_service", building.Info.m_class.m_subService.ToString());
+            feature.Attributes.Add("class_level", building.Info.m_class.m_level.ToString());
+            feature.Attributes.Add("ai_type", classification.AIType);
+            feature.Attributes.Add("classification_layer", classification.PrimaryLayer);
+            feature.Attributes.Add("classification_status", classification.ClassificationStatus);
+            feature.Attributes.Add("width", building.Width.ToString(CultureInfo.InvariantCulture));
+            feature.Attributes.Add("length", building.Length.ToString(CultureInfo.InvariantCulture));
+            feature.Attributes.Add("angle", building.m_angle.ToString("R", CultureInfo.InvariantCulture));
+            feature.Attributes.Add("centroid_lon", centroid.Lng.ToString("R", CultureInfo.InvariantCulture));
+            feature.Attributes.Add("centroid_lat", centroid.Lat.ToString("R", CultureInfo.InvariantCulture));
+            feature.Attributes.Add("district_id", districtId.ToString(CultureInfo.InvariantCulture));
+            feature.Attributes.Add("park_id", parkId.ToString(CultureInfo.InvariantCulture));
+
+            if (includeExtendedAttributes)
+            {
+                AddMemberAttributes(feature.Attributes, building, "building");
+            }
+
+            layer.Features.Add(feature);
+        }
+
+        private BuildingClassification ClassifyBuilding(ushort buildingId, Building building)
+        {
+            BuildingClassification classification = new BuildingClassification();
+            object ai = GetMemberValue(building.Info, "m_buildingAI");
+            classification.AIType = ai == null ? "unknown" : ai.GetType().Name;
+            classification.PrimaryLayer = "buildings";
+            classification.ClassificationStatus = "fallback";
+
+            string service = building.Info.m_class.m_service.ToString();
+            string text = SafeLower(BuildSearchText(building.Info));
+
+            classification.IsOutsideConnectionBuilding = classification.AIType == "OutsideConnectionAI";
+            classification.IsWaterFacility = classification.AIType == "WaterFacilityAI" || classification.AIType == "WaterCleanerAI" || classification.AIType == "WaterJunctionAI" || service.IndexOf("Water", StringComparison.OrdinalIgnoreCase) >= 0;
+            classification.IsFishingFacility = classification.AIType == "FishingHarborAI";
+            classification.IsAirportBuilding = classification.AIType.StartsWith("Airport", StringComparison.OrdinalIgnoreCase) || classification.AIType == "PrivateAirportAI";
+            classification.IsCampusBuilding = classification.AIType.IndexOf("Campus", StringComparison.OrdinalIgnoreCase) >= 0;
+            classification.IsIndustryBuilding = classification.AIType.IndexOf("Industry", StringComparison.OrdinalIgnoreCase) >= 0;
+            classification.IsPedestrianServicePoint = text.Contains("service point");
+            classification.IsTransitFacility = classification.AIType == "TransportStationAI" || service.IndexOf("PublicTransport", StringComparison.OrdinalIgnoreCase) >= 0 || classification.IsAirportBuilding;
+            classification.IsTransitHub = classification.IsTransitFacility && (text.Contains("hub") || text.Contains("exchange") || text.Contains("terminal"));
+
+            if (classification.IsOutsideConnectionBuilding)
+            {
+                classification.PrimaryLayer = "outside_connection_buildings";
+                classification.ClassificationStatus = "ai_type";
+            }
+            else if (classification.IsAirportBuilding)
+            {
+                classification.PrimaryLayer = "airport_buildings";
+                classification.ClassificationStatus = "ai_type";
+            }
+            else if (classification.IsCampusBuilding)
+            {
+                classification.PrimaryLayer = "campus_buildings";
+                classification.ClassificationStatus = "ai_type";
+            }
+            else if (classification.IsIndustryBuilding)
+            {
+                classification.PrimaryLayer = "industry_buildings";
+                classification.ClassificationStatus = "ai_type";
+            }
+            else if (classification.IsWaterFacility)
+            {
+                classification.PrimaryLayer = "water_facilities";
+                classification.ClassificationStatus = "ai_type";
+            }
+            else if (classification.IsFishingFacility)
+            {
+                classification.PrimaryLayer = "fishing_facilities";
+                classification.ClassificationStatus = "ai_type";
+            }
+            else if (classification.IsPedestrianServicePoint)
+            {
+                classification.PrimaryLayer = "pedestrian_service_points";
+                classification.ClassificationStatus = "prefab_text";
+            }
+            else if (classification.IsTransitHub)
+            {
+                classification.PrimaryLayer = "transit_hubs";
+                classification.ClassificationStatus = "prefab_text";
+            }
+            else if (classification.IsTransitFacility)
+            {
+                classification.PrimaryLayer = "transit_facilities";
+                classification.ClassificationStatus = "service";
+            }
+
+            return classification;
+        }
+
+        private GeoSkylinesLayer BuildAreaLayer(string layerName)
+        {
+            EnsureAreaLayerCache();
+            return areaLayerCache[layerName];
+        }
+
+        private void EnsureAreaLayerCache()
+        {
+            if (areaCacheLoaded)
+            {
+                return;
+            }
+
+            areaCacheLoaded = true;
+            string[] areaLayers = new string[] { "districts", "park_areas", "industry_areas", "campus_areas", "airport_areas", "pedestrian_areas" };
+            foreach (string layerName in areaLayers)
+            {
+                areaLayerCache[layerName] = CreateLayer(layerName);
+            }
+
+            Dictionary<string, Dictionary<int, AreaAccumulator>> accumulators = new Dictionary<string, Dictionary<int, AreaAccumulator>>(StringComparer.OrdinalIgnoreCase);
+            foreach (string layerName in areaLayers)
+            {
+                accumulators[layerName] = new Dictionary<int, AreaAccumulator>();
+            }
+
+            float sampleSize = DistrictManager.DISTRICTGRID_CELL_SIZE;
+            int minX = Mathf.FloorToInt(exportXMin / sampleSize);
+            int maxX = Mathf.CeilToInt(exportXMax / sampleSize);
+            int minZ = Mathf.FloorToInt(exportYMin / sampleSize);
+            int maxZ = Mathf.CeilToInt(exportYMax / sampleSize);
+
+            for (int x = minX; x < maxX; x++)
+            {
+                float worldX = (x * sampleSize) + (sampleSize * 0.5f);
+                for (int z = minZ; z < maxZ; z++)
+                {
+                    float worldZ = (z * sampleSize) + (sampleSize * 0.5f);
+                    Vector3 worldPosition = new Vector3(worldX, 0f, worldZ);
+
+                    byte districtId = districtManager.GetDistrict(worldPosition);
+                    if (districtId > 0)
+                    {
+                        AddAreaCell(accumulators["districts"], districtId, "districts", districtManager.GetDistrictName(districtId), "district", x, z);
+                    }
+
+                    byte parkId = districtManager.GetPark(worldPosition);
+                    if (parkId > 0)
+                    {
+                        DistrictPark park = districtManager.m_parks.m_buffer[parkId];
+                        string parkLayer = MapParkTypeToLayer(park.m_parkType);
+                        if (parkLayer != null)
+                        {
+                            AddAreaCell(accumulators[parkLayer], parkId, parkLayer, districtManager.GetParkName(parkId), park.m_parkType.ToString(), x, z);
+                        }
+                    }
+                }
+            }
+
+            foreach (KeyValuePair<string, Dictionary<int, AreaAccumulator>> kvp in accumulators)
+            {
+                GeoSkylinesLayer layer = areaLayerCache[kvp.Key];
+                foreach (AreaAccumulator area in kvp.Value.Values.OrderBy(delegate(AreaAccumulator item) { return item.AreaId; }))
+                {
+                    GeoSkylinesGeometry geometry = BuildAreaGeometry(area.Cells, sampleSize);
+                    GeoSkylinesFeature feature = new GeoSkylinesFeature(layer.Name, area.AreaId.ToString(CultureInfo.InvariantCulture), geometry);
+                    feature.Attributes.Add("id", area.AreaId.ToString(CultureInfo.InvariantCulture));
+                    feature.Attributes.Add("name", area.Name);
+                    feature.Attributes.Add("area_type", area.AreaType);
+                    feature.Attributes.Add("sample_cell_count", area.Cells.Count.ToString(CultureInfo.InvariantCulture));
+                    layer.Features.Add(feature);
+                }
+
+                if (layer.Features.Count == 0)
+                {
+                    layer.Warnings.Add("No features were detected for " + layer.Name + " in the loaded save.");
+                }
+            }
+        }
+
+        private void AddAreaCell(Dictionary<int, AreaAccumulator> target, int areaId, string layerName, string name, string areaType, int x, int z)
+        {
+            AreaAccumulator accumulator;
+            if (!target.TryGetValue(areaId, out accumulator))
+            {
+                accumulator = new AreaAccumulator();
+                accumulator.AreaId = areaId;
+                accumulator.LayerName = layerName;
+                accumulator.Name = string.IsNullOrEmpty(name) ? (areaType + " " + areaId.ToString(CultureInfo.InvariantCulture)) : name;
+                accumulator.AreaType = areaType;
+                target.Add(areaId, accumulator);
+            }
+
+            accumulator.Cells.Add(MakeCellKey(x, z));
+        }
+
+        private static string MapParkTypeToLayer(DistrictPark.ParkType parkType)
+        {
+            switch (parkType)
+            {
+                case DistrictPark.ParkType.Generic:
+                case DistrictPark.ParkType.AmusementPark:
+                case DistrictPark.ParkType.Zoo:
+                case DistrictPark.ParkType.NatureReserve:
+                    return "park_areas";
+                case DistrictPark.ParkType.Industry:
+                case DistrictPark.ParkType.Farming:
+                case DistrictPark.ParkType.Forestry:
+                case DistrictPark.ParkType.Ore:
+                case DistrictPark.ParkType.Oil:
+                    return "industry_areas";
+                case DistrictPark.ParkType.GenericCampus:
+                case DistrictPark.ParkType.TradeSchool:
+                case DistrictPark.ParkType.LiberalArts:
+                case DistrictPark.ParkType.University:
+                    return "campus_areas";
+                case DistrictPark.ParkType.Airport:
+                    return "airport_areas";
+                case DistrictPark.ParkType.PedestrianZone:
+                    return "pedestrian_areas";
+                default:
+                    return null;
+            }
+        }
+
+        private GeoSkylinesGeometry BuildAreaGeometry(HashSet<long> cells, float cellSize)
+        {
+            Dictionary<GridEdgeKey, DirectedGridEdge> edgeMap = new Dictionary<GridEdgeKey, DirectedGridEdge>();
+            foreach (long key in cells)
+            {
+                int x = ExtractCellX(key);
+                int z = ExtractCellZ(key);
+                GridPoint p0 = new GridPoint(x, z);
+                GridPoint p1 = new GridPoint(x + 1, z);
+                GridPoint p2 = new GridPoint(x + 1, z + 1);
+                GridPoint p3 = new GridPoint(x, z + 1);
+                AddOrRemoveEdge(edgeMap, new DirectedGridEdge(p0, p1));
+                AddOrRemoveEdge(edgeMap, new DirectedGridEdge(p1, p2));
+                AddOrRemoveEdge(edgeMap, new DirectedGridEdge(p2, p3));
+                AddOrRemoveEdge(edgeMap, new DirectedGridEdge(p3, p0));
+            }
+
+            List<List<GridPoint>> loops = TraceLoops(edgeMap);
+            List<List<GridPoint>> outerLoops = new List<List<GridPoint>>();
+            List<List<GridPoint>> holeLoops = new List<List<GridPoint>>();
+            foreach (List<GridPoint> loop in loops)
+            {
+                if (ComputeSignedArea(loop) >= 0d)
+                {
+                    outerLoops.Add(loop);
+                }
+                else
+                {
+                    holeLoops.Add(loop);
+                }
+            }
+
+            List<List<List<GridPoint>>> groupedPolygons = new List<List<List<GridPoint>>>();
+            foreach (List<GridPoint> outerLoop in outerLoops)
+            {
+                groupedPolygons.Add(new List<List<GridPoint>> { outerLoop });
+            }
+
+            foreach (List<GridPoint> holeLoop in holeLoops)
+            {
+                GridPoint samplePoint = holeLoop[0];
+                bool assigned = false;
+                for (int i = 0; i < groupedPolygons.Count; i++)
+                {
+                    if (IsPointInPolygon(groupedPolygons[i][0], samplePoint))
+                    {
+                        groupedPolygons[i].Add(holeLoop);
+                        assigned = true;
+                        break;
+                    }
+                }
+
+                if (!assigned)
+                {
+                    groupedPolygons.Add(new List<List<GridPoint>> { holeLoop });
+                }
+            }
+
+            if (groupedPolygons.Count == 1)
+            {
+                GeoSkylinesGeometry polygon = new GeoSkylinesGeometry("Polygon");
+                foreach (List<GridPoint> ring in groupedPolygons[0])
+                {
+                    polygon.Parts.Add(ConvertRing(ring, cellSize));
+                }
+                return polygon;
+            }
+
+            GeoSkylinesGeometry multiPolygon = new GeoSkylinesGeometry("MultiPolygon");
+            foreach (List<List<GridPoint>> polygonRings in groupedPolygons)
+            {
+                List<List<GeoSkylinesCoordinate>> polygon = new List<List<GeoSkylinesCoordinate>>();
+                foreach (List<GridPoint> ring in polygonRings)
+                {
+                    polygon.Add(ConvertRing(ring, cellSize));
+                }
+                multiPolygon.Polygons.Add(polygon);
+            }
+            return multiPolygon;
+        }
+
+        private static void AddOrRemoveEdge(Dictionary<GridEdgeKey, DirectedGridEdge> edgeMap, DirectedGridEdge edge)
+        {
+            GridEdgeKey key = new GridEdgeKey(edge.Start, edge.End);
+            if (edgeMap.ContainsKey(key))
+            {
+                edgeMap.Remove(key);
+            }
+            else
+            {
+                edgeMap.Add(key, edge);
+            }
+        }
+
+        private static List<List<GridPoint>> TraceLoops(Dictionary<GridEdgeKey, DirectedGridEdge> edgeMap)
+        {
+            Dictionary<GridPoint, List<GridPoint>> adjacency = new Dictionary<GridPoint, List<GridPoint>>();
+            foreach (DirectedGridEdge edge in edgeMap.Values)
+            {
+                List<GridPoint> targets;
+                if (!adjacency.TryGetValue(edge.Start, out targets))
+                {
+                    targets = new List<GridPoint>();
+                    adjacency.Add(edge.Start, targets);
+                }
+                targets.Add(edge.End);
+            }
+
+            HashSet<GridEdgeKey> visited = new HashSet<GridEdgeKey>();
+            List<List<GridPoint>> loops = new List<List<GridPoint>>();
+            foreach (DirectedGridEdge edge in edgeMap.Values)
+            {
+                GridEdgeKey startKey = new GridEdgeKey(edge.Start, edge.End);
+                if (visited.Contains(startKey))
                 {
                     continue;
                 }
 
-                GeoSkylinesGeometry geometry = BuildBuildingGeometry(building);
-                string featureId = i.ToString(CultureInfo.InvariantCulture);
-                GeoSkylinesFeature feature = new GeoSkylinesFeature(layerName, featureId, geometry);
-                LatLng centroid = GamePosition2LatLng(building.m_position);
-                feature.Attributes.Add("id", featureId);
-                feature.Attributes.Add("name", GetBuildingName((ushort)i, building));
-                feature.Attributes.Add("prefab", SafeString(building.Info.name));
-                feature.Attributes.Add("service", building.Info.m_class.m_service.ToString());
-                feature.Attributes.Add("sub_service", building.Info.m_class.m_subService.ToString());
-                feature.Attributes.Add("class_level", building.Info.m_class.m_level.ToString());
-                feature.Attributes.Add("width", building.Width.ToString(CultureInfo.InvariantCulture));
-                feature.Attributes.Add("length", building.Length.ToString(CultureInfo.InvariantCulture));
-                feature.Attributes.Add("angle", building.m_angle.ToString("R", CultureInfo.InvariantCulture));
-                feature.Attributes.Add("centroid_lon", centroid.Lng.ToString("R", CultureInfo.InvariantCulture));
-                feature.Attributes.Add("centroid_lat", centroid.Lat.ToString("R", CultureInfo.InvariantCulture));
-                feature.Attributes.Add("transport_hint", ClassifyBuildingTransportHint(building));
-
-                if (includeExtendedAttributes)
+                List<GridPoint> loop = new List<GridPoint>();
+                GridPoint start = edge.Start;
+                GridPoint current = edge.Start;
+                GridPoint next = edge.End;
+                loop.Add(start);
+                while (true)
                 {
-                    AddMemberAttributes(feature.Attributes, building, "building");
+                    visited.Add(new GridEdgeKey(current, next));
+                    loop.Add(next);
+                    if (next.Equals(start))
+                    {
+                        break;
+                    }
+
+                    List<GridPoint> candidates = adjacency[next];
+                    GridPoint continuation = candidates[0];
+                    for (int i = 0; i < candidates.Count; i++)
+                    {
+                        GridEdgeKey candidateKey = new GridEdgeKey(next, candidates[i]);
+                        if (!visited.Contains(candidateKey))
+                        {
+                            continuation = candidates[i];
+                            break;
+                        }
+                    }
+
+                    current = next;
+                    next = continuation;
                 }
 
-                layer.Features.Add(feature);
+                loops.Add(SimplifyLoop(loop));
             }
 
-            return layer;
+            return loops;
+        }
+
+        private static List<GridPoint> SimplifyLoop(List<GridPoint> points)
+        {
+            if (points.Count < 4)
+            {
+                return points;
+            }
+
+            List<GridPoint> simplified = new List<GridPoint>();
+            for (int i = 0; i < points.Count; i++)
+            {
+                GridPoint previous = points[(i - 1 + points.Count) % points.Count];
+                GridPoint current = points[i];
+                GridPoint next = points[(i + 1) % points.Count];
+
+                int dx1 = current.X - previous.X;
+                int dz1 = current.Z - previous.Z;
+                int dx2 = next.X - current.X;
+                int dz2 = next.Z - current.Z;
+                if ((dx1 == dx2 && dz1 == dz2) && i != points.Count - 1)
+                {
+                    continue;
+                }
+
+                simplified.Add(current);
+            }
+
+            if (!simplified[0].Equals(simplified[simplified.Count - 1]))
+            {
+                simplified.Add(simplified[0]);
+            }
+
+            return simplified;
+        }
+
+        private static double ComputeSignedArea(List<GridPoint> ring)
+        {
+            double area = 0d;
+            for (int i = 0; i < ring.Count - 1; i++)
+            {
+                area += (ring[i].X * ring[i + 1].Z) - (ring[i + 1].X * ring[i].Z);
+            }
+            return area * 0.5d;
+        }
+
+        private static bool IsPointInPolygon(List<GridPoint> ring, GridPoint point)
+        {
+            bool inside = false;
+            for (int i = 0, j = ring.Count - 1; i < ring.Count; j = i++)
+            {
+                if (((ring[i].Z > point.Z) != (ring[j].Z > point.Z))
+                    && (point.X < (ring[j].X - ring[i].X) * (point.Z - ring[i].Z) / (double)(ring[j].Z - ring[i].Z) + ring[i].X))
+                {
+                    inside = !inside;
+                }
+            }
+            return inside;
+        }
+
+        private List<GeoSkylinesCoordinate> ConvertRing(List<GridPoint> ring, float cellSize)
+        {
+            List<GeoSkylinesCoordinate> converted = new List<GeoSkylinesCoordinate>();
+            for (int i = 0; i < ring.Count; i++)
+            {
+                float worldX = ring[i].X * cellSize;
+                float worldZ = ring[i].Z * cellSize;
+                converted.Add(ToCoordinate(new Vector3(worldX, 0f, worldZ)));
+            }
+            return converted;
+        }
+
+        private static long MakeCellKey(int x, int z)
+        {
+            return ((long)x << 32) ^ (uint)z;
+        }
+
+        private static int ExtractCellX(long key)
+        {
+            return (int)(key >> 32);
+        }
+
+        private static int ExtractCellZ(long key)
+        {
+            return (int)(key & 0xffffffff);
         }
 
         private GeoSkylinesLayer BuildZonesLayer()
         {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer("zones");
-            ZoneManager zoneManager = ZoneManager.instance;
+            if (zonesLayerCache != null)
+            {
+                return zonesLayerCache;
+            }
+
+            GeoSkylinesLayer layer = CreateLayer("zones");
             for (int i = 0; i < zoneManager.m_blocks.m_buffer.Length; i++)
             {
                 ZoneBlock zoneBlock = zoneManager.m_blocks.m_buffer[i];
@@ -485,13 +1380,18 @@ namespace GeoSkylines
                 layer.Features.Add(feature);
             }
 
-            return layer;
+            zonesLayerCache = layer;
+            return zonesLayerCache;
         }
 
         private GeoSkylinesLayer BuildTreesLayer()
         {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer("trees");
-            TreeManager treeManager = TreeManager.instance;
+            if (treesLayerCache != null)
+            {
+                return treesLayerCache;
+            }
+
+            GeoSkylinesLayer layer = CreateLayer("trees");
             TreeInstance[] trees = treeManager.m_trees.m_buffer;
             int exportId = 0;
             for (int i = 0; i < trees.Length; i++)
@@ -503,9 +1403,7 @@ namespace GeoSkylines
                 }
 
                 exportId += 1;
-                LatLng treePoint = GamePosition2LatLng(tree.Position);
-                GeoSkylinesGeometry geometry = CreatePointGeometry(treePoint);
-                GeoSkylinesFeature feature = new GeoSkylinesFeature("trees", exportId.ToString(CultureInfo.InvariantCulture), geometry);
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("trees", exportId.ToString(CultureInfo.InvariantCulture), CreatePointGeometry(GamePosition2LatLng(tree.Position)));
                 feature.Attributes.Add("id", exportId.ToString(CultureInfo.InvariantCulture));
                 feature.Attributes.Add("tree_index", i.ToString(CultureInfo.InvariantCulture));
 
@@ -517,43 +1415,134 @@ namespace GeoSkylines
                 layer.Features.Add(feature);
             }
 
-            return layer;
+            treesLayerCache = layer;
+            return treesLayerCache;
         }
 
-        private GeoSkylinesLayer BuildOutsideConnectionsLayer()
+        private GeoSkylinesLayer BuildPropsLayer()
         {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer("outside_connections");
-            NetNode[] nodes = netManager.m_nodes.m_buffer;
-            for (int i = 0; i < nodes.Length; i++)
+            if (propsLayerCache != null)
             {
-                NetNode node = nodes[i];
-                if ((node.m_flags & NetNode.Flags.Created) == NetNode.Flags.None)
+                return propsLayerCache;
+            }
+
+            GeoSkylinesLayer layer = CreateLayer("props");
+            PropInstance[] props = propManager.m_props.m_buffer;
+            for (int i = 0; i < props.Length; i++)
+            {
+                PropInstance prop = props[i];
+                if ((((PropInstance.Flags)prop.m_flags) & PropInstance.Flags.Created) == PropInstance.Flags.None)
                 {
                     continue;
                 }
 
-                if ((node.m_flags & NetNode.Flags.Outside) == NetNode.Flags.None)
+                Vector3 position = prop.Position;
+                if (!WithinExportCoords(position))
                 {
                     continue;
                 }
 
-                if (!WithinExportCoords(node.m_position))
-                {
-                    continue;
-                }
-
-                GeoSkylinesFeature feature = new GeoSkylinesFeature("outside_connections", i.ToString(CultureInfo.InvariantCulture), CreatePointGeometry(GamePosition2LatLng(node.m_position)));
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("props", i.ToString(CultureInfo.InvariantCulture), CreatePointGeometry(GamePosition2LatLng(position)));
                 feature.Attributes.Add("id", i.ToString(CultureInfo.InvariantCulture));
-                feature.Attributes.Add("flags", node.m_flags.ToString());
+                feature.Attributes.Add("flags", prop.m_flags.ToString());
+                feature.Attributes.Add("info_index", prop.m_infoIndex.ToString(CultureInfo.InvariantCulture));
+                PropInfo info = PrefabCollection<PropInfo>.GetPrefab(prop.m_infoIndex);
+                feature.Attributes.Add("prefab", info == null ? string.Empty : SafeString(info.name));
+
+                if (includeExtendedAttributes)
+                {
+                    AddMemberAttributes(feature.Attributes, prop, "prop");
+                }
+
                 layer.Features.Add(feature);
             }
 
-            return layer;
+            propsLayerCache = layer;
+            return propsLayerCache;
+        }
+
+        private GeoSkylinesLayer BuildWaterSourcesLayer()
+        {
+            if (waterSourcesLayerCache != null)
+            {
+                return waterSourcesLayerCache;
+            }
+
+            GeoSkylinesLayer layer = CreateLayer("water_sources");
+            object waterSourcesWrapper = GetMemberValue(WaterManager.instance, "m_waterSources");
+            Array waterSourceBuffer = waterSourcesWrapper == null ? null : GetMemberValue(waterSourcesWrapper, "m_buffer") as Array;
+            if (waterSourceBuffer == null)
+            {
+                layer.Warnings.Add("WaterManager.m_waterSources.m_buffer was not available.");
+                waterSourcesLayerCache = layer;
+                return waterSourcesLayerCache;
+            }
+
+            for (int i = 0; i < waterSourceBuffer.Length; i++)
+            {
+                object source = waterSourceBuffer.GetValue(i);
+                ushort type = ConvertToUshort(GetMemberValue(source, "m_type"));
+                uint water = ConvertToUInt(GetMemberValue(source, "m_water"));
+                uint inputRate = ConvertToUInt(GetMemberValue(source, "m_inputRate"));
+                uint outputRate = ConvertToUInt(GetMemberValue(source, "m_outputRate"));
+                Vector3 inputPosition = ConvertToVector3(GetMemberValue(source, "m_inputPosition"));
+                Vector3 outputPosition = ConvertToVector3(GetMemberValue(source, "m_outputPosition"));
+                if (type == 0 && water == 0 && inputRate == 0 && outputRate == 0 && inputPosition == Vector3.zero && outputPosition == Vector3.zero)
+                {
+                    continue;
+                }
+
+                if (!WithinExportCoords(inputPosition) && !WithinExportCoords(outputPosition))
+                {
+                    continue;
+                }
+
+                GeoSkylinesGeometry geometry;
+                if (inputPosition == outputPosition)
+                {
+                    geometry = CreatePointGeometry(GamePosition2LatLng(inputPosition));
+                }
+                else
+                {
+                    GeoSkylinesGeometry line = new GeoSkylinesGeometry("LineString");
+                    line.Parts.Add(new List<GeoSkylinesCoordinate> { ToCoordinate(inputPosition), ToCoordinate(outputPosition) });
+                    geometry = line;
+                }
+
+                GeoSkylinesFeature feature = new GeoSkylinesFeature("water_sources", i.ToString(CultureInfo.InvariantCulture), geometry);
+                feature.Attributes.Add("id", i.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("type", MapWaterSourceType(type));
+                feature.Attributes.Add("target", ConvertToUshort(GetMemberValue(source, "m_target")).ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("water", water.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("pollution", ConvertToUInt(GetMemberValue(source, "m_pollution")).ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("input_rate", inputRate.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("output_rate", outputRate.ToString(CultureInfo.InvariantCulture));
+                feature.Attributes.Add("flow", ConvertToUInt(GetMemberValue(source, "m_flow")).ToString(CultureInfo.InvariantCulture));
+                layer.Features.Add(feature);
+            }
+
+            waterSourcesLayerCache = layer;
+            return waterSourcesLayerCache;
+        }
+
+        private string MapWaterSourceType(ushort type)
+        {
+            switch (type)
+            {
+                case 1:
+                    return "natural";
+                case 2:
+                    return "facility";
+                case 3:
+                    return "cleaner";
+                default:
+                    return "none";
+            }
         }
 
         private GeoSkylinesLayer BuildTransitLinesLayer()
         {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer("transit_lines");
+            GeoSkylinesLayer layer = CreateLayer("transit_lines");
             EnsureTransportCache();
 
             foreach (string warning in transportWarnings)
@@ -572,8 +1561,7 @@ namespace GeoSkylines
                         continue;
                     }
 
-                    LatLng point = GamePosition2LatLng(stopPosition);
-                    coordinates.Add(new GeoSkylinesCoordinate(point.Lng, point.Lat));
+                    coordinates.Add(ToCoordinate(stopPosition));
                 }
 
                 if (coordinates.Count < 2)
@@ -587,6 +1575,7 @@ namespace GeoSkylines
                 feature.Attributes.Add("id", snapshot.LineId.ToString(CultureInfo.InvariantCulture));
                 feature.Attributes.Add("name", snapshot.Name);
                 feature.Attributes.Add("transport_type", snapshot.TransportType);
+                feature.Attributes.Add("source_runtime_type", snapshot.RuntimeType);
                 feature.Attributes.Add("stop_count", snapshot.Stops.Count.ToString(CultureInfo.InvariantCulture));
                 layer.Features.Add(feature);
             }
@@ -601,7 +1590,7 @@ namespace GeoSkylines
 
         private GeoSkylinesLayer BuildTransitStopsLayer()
         {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer("transit_stops");
+            GeoSkylinesLayer layer = CreateLayer("transit_stops");
             EnsureTransportCache();
 
             foreach (string warning in transportWarnings)
@@ -629,6 +1618,7 @@ namespace GeoSkylines
                     feature.Attributes.Add("stop_id", stopId.ToString(CultureInfo.InvariantCulture));
                     feature.Attributes.Add("stop_index", index.ToString(CultureInfo.InvariantCulture));
                     feature.Attributes.Add("transport_type", snapshot.TransportType);
+                    feature.Attributes.Add("source_runtime_type", snapshot.RuntimeType);
                     layer.Features.Add(feature);
                 }
             }
@@ -638,13 +1628,6 @@ namespace GeoSkylines
                 layer.Warnings.Add("No transit stops were detected in the loaded save.");
             }
 
-            return layer;
-        }
-
-        private GeoSkylinesLayer BuildPedestrianAreasLayer()
-        {
-            GeoSkylinesLayer layer = new GeoSkylinesLayer("pedestrian_areas");
-            layer.Warnings.Add("Pedestrian area polygons are not exposed reliably via the stable CS1 modding API. This layer is emitted empty in v1; use pedestrian_streets and pedestrian_service_points as the operational layers.");
             return layer;
         }
 
@@ -694,6 +1677,7 @@ namespace GeoSkylines
                     snapshot.LineId = lineId;
                     snapshot.Name = InvokeString(manager, getLineNameMethod, lineId) ?? ("Line " + lineId.ToString(CultureInfo.InvariantCulture));
                     snapshot.TransportType = GetTransportTypeFromLine(line);
+                    snapshot.RuntimeType = line.GetType().Name;
                     snapshot.Stops = TryReadStops(line, lineId);
                     transportLines[lineId] = snapshot;
                 }
@@ -910,32 +1894,13 @@ namespace GeoSkylines
 
         private void WriteLegacyCsvAliasIfNeeded(GeoSkylinesLayer layer, string csvPath)
         {
-            string legacyName = null;
-            switch (layer.Name)
-            {
-                case "roads":
-                    legacyName = "roads_cs.csv";
-                    break;
-                case "rails":
-                    legacyName = "rails_cs.csv";
-                    break;
-                case "buildings":
-                    legacyName = "buildings_cs.csv";
-                    break;
-                case "zones":
-                    legacyName = "zones_cs.csv";
-                    break;
-                case "trees":
-                    legacyName = "trees_cs.csv";
-                    break;
-            }
-
-            if (legacyName == null)
+            GeoSkylinesExportLayerDefinition definition;
+            if (!layerDefinitions.TryGetValue(layer.Name, out definition) || string.IsNullOrEmpty(definition.LegacyCsvAlias))
             {
                 return;
             }
 
-            string legacyPath = Path.Combine(GeoSkylinesConfig.GetFilesDirectory(), legacyName);
+            string legacyPath = Path.Combine(GeoSkylinesConfig.GetFilesDirectory(), definition.LegacyCsvAlias);
             File.Copy(csvPath, legacyPath, true);
         }
 
@@ -1040,105 +2005,91 @@ namespace GeoSkylines
             return SafeString(building.Info.name);
         }
 
+        private string GetNetAIType(NetInfo info)
+        {
+            object ai = GetMemberValue(info, "m_netAI");
+            return ai == null ? "unknown" : ai.GetType().Name;
+        }
+
+        private string GetLaneTypes(NetInfo info)
+        {
+            if (info == null || info.m_lanes == null)
+            {
+                return string.Empty;
+            }
+
+            return string.Join("|", info.m_lanes.Select(delegate(NetInfo.Lane lane) { return lane.m_laneType.ToString(); }).Distinct().OrderBy(delegate(string item) { return item; }).ToArray());
+        }
+
+        private string GetVehicleTypes(NetInfo info)
+        {
+            if (info == null || info.m_lanes == null)
+            {
+                return string.Empty;
+            }
+
+            return string.Join("|", info.m_lanes.Select(delegate(NetInfo.Lane lane) { return lane.m_vehicleType.ToString(); }).Distinct().Where(delegate(string item) { return !string.IsNullOrEmpty(item) && item != "None"; }).OrderBy(delegate(string item) { return item; }).ToArray());
+        }
+
+        private string GetPrimaryTransportType(NetInfo info, string aiType, string vehicleTypes)
+        {
+            string subService = info.m_class.m_subService.ToString();
+            if (aiType == "ShipPathAI")
+            {
+                return "ship";
+            }
+            if (aiType == "FishingPathAI")
+            {
+                return "fishing";
+            }
+            if (aiType == "CanalAI")
+            {
+                return "canal";
+            }
+            if (aiType == "WaterPipeAI")
+            {
+                return "water_pipe";
+            }
+            if (aiType == "PedestrianZoneRoadAI" || aiType == "PedestrianZoneBridgeAI")
+            {
+                return "pedestrian_zone";
+            }
+            if (aiType == "PedestrianWayAI" || aiType == "PedestrianPathAI" || aiType == "PedestrianBridgeAI" || aiType == "PedestrianTunnelAI")
+            {
+                return "pedestrian";
+            }
+            if (subService.IndexOf("Train", StringComparison.OrdinalIgnoreCase) >= 0 || aiType == "TrainTrackAI")
+            {
+                return "train";
+            }
+            if (subService.IndexOf("Metro", StringComparison.OrdinalIgnoreCase) >= 0 || aiType == "MetroTrackAI")
+            {
+                return "metro";
+            }
+            if (subService.IndexOf("Monorail", StringComparison.OrdinalIgnoreCase) >= 0 || aiType == "MonorailTrackAI")
+            {
+                return "monorail";
+            }
+            if (subService.IndexOf("Tram", StringComparison.OrdinalIgnoreCase) >= 0 || vehicleTypes.IndexOf("Tram", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "tram";
+            }
+            if (subService.IndexOf("Trolleybus", StringComparison.OrdinalIgnoreCase) >= 0 || vehicleTypes.IndexOf("Trolleybus", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "trolleybus";
+            }
+            if (aiType == "TransportPathAI" || aiType == "TransportLineAI" || aiType == "CableCarPathAI")
+            {
+                return "guideway";
+            }
+            return "road";
+        }
+
         private float GetElevationAtNode(ushort nodeId)
         {
             Vector3 position = netManager.m_nodes.m_buffer[nodeId].m_position;
             float terrainHeight = terrainManager.SampleRawHeightSmoothWithWater(position, false, 0f);
             return position.y - terrainHeight;
-        }
-
-        private bool IsTransitFacility(Building building)
-        {
-            if (building.Info == null)
-            {
-                return false;
-            }
-
-            string text = SafeLower(BuildSearchText(building.Info));
-            string service = building.Info.m_class.m_service.ToString().ToLowerInvariant();
-            return service.Contains("publictransport")
-                || text.Contains("metro")
-                || text.Contains("train")
-                || text.Contains("bus")
-                || text.Contains("tram")
-                || text.Contains("ferry")
-                || text.Contains("harbor")
-                || text.Contains("monorail")
-                || text.Contains("cable car")
-                || text.Contains("taxi")
-                || text.Contains("airport");
-        }
-
-        private bool IsTransitHub(Building building)
-        {
-            if (!IsTransitFacility(building))
-            {
-                return false;
-            }
-
-            string text = SafeLower(BuildSearchText(building.Info));
-            return text.Contains("hub") || text.Contains("exchange") || text.Contains("terminal");
-        }
-
-        private bool IsPedestrianServicePoint(Building building)
-        {
-            if (building.Info == null)
-            {
-                return false;
-            }
-
-            string text = SafeLower(BuildSearchText(building.Info));
-            return text.Contains("service point");
-        }
-
-        private string ClassifyTransportMode(string infoText)
-        {
-            if (infoText.Contains("metro"))
-            {
-                return "metro";
-            }
-            if (infoText.Contains("tram"))
-            {
-                return "tram";
-            }
-            if (infoText.Contains("monorail"))
-            {
-                return "monorail";
-            }
-            if (infoText.Contains("ferry"))
-            {
-                return "ferry";
-            }
-            if (infoText.Contains("ship") || infoText.Contains("harbor"))
-            {
-                return "ship";
-            }
-            if (infoText.Contains("pedestrian") || infoText.Contains("promenade"))
-            {
-                return "pedestrian";
-            }
-            if (infoText.Contains("train"))
-            {
-                return "train";
-            }
-            return "road";
-        }
-
-        private string ClassifyBuildingTransportHint(Building building)
-        {
-            if (IsPedestrianServicePoint(building))
-            {
-                return "pedestrian_service_point";
-            }
-            if (IsTransitHub(building))
-            {
-                return "transit_hub";
-            }
-            if (IsTransitFacility(building))
-            {
-                return "transit_facility";
-            }
-            return "none";
         }
 
         private string BuildSearchText(object prefab)
@@ -1248,6 +2199,39 @@ namespace GeoSkylines
             {
                 return 0;
             }
+        }
+
+        private static uint ConvertToUInt(object value)
+        {
+            if (value == null)
+            {
+                return 0;
+            }
+
+            uint converted;
+            if (uint.TryParse(value.ToString(), out converted))
+            {
+                return converted;
+            }
+
+            try
+            {
+                return Convert.ToUInt32(value, CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static Vector3 ConvertToVector3(object value)
+        {
+            if (value is Vector3)
+            {
+                return (Vector3)value;
+            }
+
+            return Vector3.zero;
         }
 
         private static object SafeInvoke(object instance, MethodInfo method, object[] arguments)
