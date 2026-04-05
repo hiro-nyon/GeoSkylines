@@ -242,13 +242,17 @@ namespace GeoSkylines
             manifest.ConfigPath = config.ConfigPath;
             manifest.Formats.AddRange(config.GetExportFormats());
 
+            string[] configuredFormats = config.GetExportFormats();
+            bool requiresGeoJsonForCli = configuredFormats.Any(delegate(string format) { return format == "shp" || format == "parquet"; });
+
             foreach (string layerName in layersToExport)
             {
                 GeoSkylinesLayer layer = BuildLayer(layerName);
                 manifest.Layers.Add(layer);
 
                 string baseName = BuildBaseFileName(layer.Name);
-                foreach (string format in config.GetExportFormats())
+                bool wroteGeoJson = false;
+                foreach (string format in configuredFormats)
                 {
                     if (format == "csv")
                     {
@@ -262,7 +266,15 @@ namespace GeoSkylines
                         string geoJsonPath = Path.Combine(outputDirectory, baseName + ".geojson");
                         GeoSkylinesGeoJsonWriter.Write(geoJsonPath, layer);
                         layer.Files.Add(geoJsonPath);
+                        wroteGeoJson = true;
                     }
+                }
+
+                if (requiresGeoJsonForCli && !wroteGeoJson)
+                {
+                    string geoJsonPath = Path.Combine(outputDirectory, baseName + ".geojson");
+                    GeoSkylinesGeoJsonWriter.Write(geoJsonPath, layer);
+                    layer.Files.Add(geoJsonPath);
                 }
             }
 
