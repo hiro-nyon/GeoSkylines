@@ -6,13 +6,14 @@ using System.Runtime.InteropServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 [assembly: AssemblyTitle("GeoSkylines")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyDescription("Import/export geodata for Cities: Skylines with CSV and GeoJSON output plus optional SHP and GeoParquet conversion.")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
+[assembly: AssemblyCompany("Hironobu Kasuga")]
 [assembly: AssemblyProduct("GeoSkylines")]
 [assembly: AssemblyCopyright("Copyright © 2026 Hironobu Kasuga")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
+[assembly: AssemblyInformationalVersion("1.0.0-beta.1")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
