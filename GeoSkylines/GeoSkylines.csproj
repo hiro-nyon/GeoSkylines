@@ -69,10 +69,12 @@
     <Compile Include="GeoSkylines.cs" />
     <Compile Include="GeoSkylinesConfig.cs" />
     <Compile Include="GeoSkylinesExport.cs" />
+    <Compile Include="GeoSkylinesLayerCatalog.cs" />
     <Compile Include="GeoSkylinesExportModels.cs" />
     <Compile Include="GeoSkylinesExportWriters.cs" />
     <Compile Include="GeoSkylinesImport.cs" />
     <Compile Include="GeoSkylinesLoading.cs" />
+    <Compile Include="GeoSkylinesSaveData.cs" />
     <Compile Include="GeoSkylinesThreading.cs" />
     <Compile Include="GeoSkylinesTool.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
