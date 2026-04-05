@@ -1,0 +1,12 @@
+GeoSkylines
+Copyright (c) 2026 Hironobu Kasuga
+
+This repository contains a modernized fork of the original GeoSkylines mod
+concept and codebase. Before public distribution, keep any upstream license
+and attribution notices that apply to imported code.
+
+Attribution notes:
+- Original GeoSkylines project reference: https://github.com/gonzikcz/GeoSkylines
+- This repository vendors a minimal subset of burningmime.curves for curve
+  fitting compatibility. Review the upstream project license if you further
+  expand or replace that vendored code.
