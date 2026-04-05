@@ -1,9 +1,9 @@
 using System.Text.Json;
-using geoparquet;
+using GeoParquet;
 using NetTopologySuite.Features;
 using NetTopologySuite.Geometries;
 using NetTopologySuite.IO;
-using NetTopologySuite.IO.Esri.Shapefile;
+using NetTopologySuite.IO.Esri;
 using ParquetSharp;
 
 namespace GeoSkylines.ExportCli;
@@ -98,6 +98,7 @@ internal static class Program
         string parquetPath = Path.ChangeExtension(geoJsonFile, ".parquet");
         string[] propertyNames = collection
             .SelectMany(feature => feature.Attributes.GetNames())
+            .Where(name => !string.Equals(name, "id", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
